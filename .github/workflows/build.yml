@@ -1,0 +1,162 @@
+name: Build Muse Windows (installers)
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # 1) Build the standalone Muse Link installer first; the Muse app
+  #    installer bundles it as its optional component.
+  link-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore package-lock.json from base64 chunks
+        working-directory: link
+        shell: pwsh
+        run: |
+          $b64 = (Get-ChildItem 'package-lock.b64.part*' | Sort-Object Name | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes('package-lock.json', [Convert]::FromBase64String($b64))
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: link/package-lock.json
+
+      - name: Restore icons from base64
+        working-directory: link
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes('assets/icon.ico', [Convert]::FromBase64String((Get-Content 'assets/icon.ico.b64' -Raw)))
+          [IO.File]::WriteAllBytes('assets/icon.png', [Convert]::FromBase64String((Get-Content 'assets/icon.png.b64' -Raw)))
+
+      - name: Install Link dependencies
+        working-directory: link
+        run: npm ci
+
+      - name: Build Link installer (no publish)
+        working-directory: link
+        run: npx electron-builder --win nsis --publish never
+
+      - name: Upload Link installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: link-installer
+          path: link/dist/Muse-Link-Setup-*.exe
+          if-no-files-found: error
+
+  # 2) Build the Muse app installer with the Link installer bundled.
+  #    Tag builds publish a draft release (Muse-Windows-Setup + portable
+  #    + latest.yml).
+  app-installer:
+    needs: link-installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore package-lock.json from base64 chunks
+        working-directory: app
+        shell: pwsh
+        run: |
+          $b64 = (Get-ChildItem 'package-lock.b64.part*' | Sort-Object Name | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes('package-lock.json', [Convert]::FromBase64String($b64))
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Download Link installer into app/link-setup
+        uses: actions/download-artifact@v4
+        with:
+          name: link-installer
+          path: app/link-setup
+
+      - name: Normalize bundled Link installer name
+        shell: pwsh
+        run: |
+          Get-ChildItem app/link-setup/Muse-Link-Setup-*.exe |
+            Rename-Item -NewName Muse-Link-Setup.exe
+          Get-ChildItem app/link-setup
+
+      - name: Restore icons from base64
+        working-directory: app
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes('assets/icon.ico', [Convert]::FromBase64String((Get-Content 'assets/icon.ico.b64' -Raw)))
+          [IO.File]::WriteAllBytes('assets/icon.png', [Convert]::FromBase64String((Get-Content 'assets/icon.png.b64' -Raw)))
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Build app installers and publish draft release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish always
+
+      - name: Build app installers (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        working-directory: app
+        run: npx electron-builder --win --publish never
+
+      - name: Upload app installer artifacts (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-installer
+          path: |
+            app/dist/*.exe
+            app/dist/latest.yml
+          if-no-files-found: ignore
+
+  # 3) Tag builds only: add the standalone Link installer and its
+  #    update feed (link.yml, channel "link") to the same release.
+  link-release:
+    needs: app-installer
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore package-lock.json from base64 chunks
+        working-directory: link
+        shell: pwsh
+        run: |
+          $b64 = (Get-ChildItem 'package-lock.b64.part*' | Sort-Object Name | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes('package-lock.json', [Convert]::FromBase64String($b64))
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: link/package-lock.json
+
+      - name: Restore icons from base64
+        working-directory: link
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes('assets/icon.ico', [Convert]::FromBase64String((Get-Content 'assets/icon.ico.b64' -Raw)))
+          [IO.File]::WriteAllBytes('assets/icon.png', [Convert]::FromBase64String((Get-Content 'assets/icon.png.b64' -Raw)))
+
+      - name: Install Link dependencies
+        working-directory: link
+        run: npm ci
+
+      - name: Build Link installer and add to the release
+        working-directory: link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win nsis --publish always
