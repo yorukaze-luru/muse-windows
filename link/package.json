@@ -1,0 +1,68 @@
+{
+  "author": "Yorukaze Ruru",
+  "build": {
+    "publish": [
+      {
+        "owner": "yorukaze-luru",
+        "provider": "github",
+        "repo": "muse-windows",
+        "channel": "link"
+      }
+    ],
+    "appId": "jp.yorukaze.muse-link",
+    "copyright": "Copyright 2026 Yorukaze Ruru (personal use, unofficial)",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "link-preload.js",
+      "package.json",
+      "assets/icon.ico",
+      "assets/icon.png",
+      "assets/wizard.html",
+      "assets/agent.html",
+      "scripts/setup.ps1",
+      "scripts/revoke.ps1"
+    ],
+    "nsis": {
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Muse-Link-Setup-${version}.${ext}",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "oneClick": false,
+      "shortcutName": "Muse Link"
+    },
+    "productName": "Muse Link",
+    "win": {
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "arch": [
+            "x64"
+          ],
+          "target": "nsis"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  },
+  "description": "Muse Link (unofficial, personal use only): agent-only app for the local folder link (Tailscale + Windows OpenSSH). Separate from the Muse Windows wrapper app.",
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "name": "muse-link",
+  "private": true,
+  "scripts": {
+    "dist": "electron-builder --win nsis",
+    "pack": "electron-builder --win nsis --dir",
+    "start": "electron ."
+  },
+  "version": "1.0.0"
+}
