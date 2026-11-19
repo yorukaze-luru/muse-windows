@@ -12,13 +12,13 @@
 !include LogicLib.nsh
 !include nsDialogs.nsh
 
+; The page, its functions and its variables exist only in the installer
+; build. Without this guard, the uninstaller build (BUILD_UNINSTALLER)
+; sees them as unreferenced and makensis warnings 6010/6001 fail the build.
+!ifndef BUILD_UNINSTALLER
 Var /GLOBAL museLinkCheckboxHwnd
 Var /GLOBAL museLinkState
 
-; The page and its functions exist only in the installer build. Without
-; this guard, the uninstaller build (BUILD_UNINSTALLER) sees the functions
-; as unreferenced and makensis warning 6010 fails the build.
-!ifndef BUILD_UNINSTALLER
 !macro customPageAfterChangeDir
   Page custom MuseLinkPageCreate MuseLinkPageLeave
 !macroend
