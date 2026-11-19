@@ -1,0 +1,82 @@
+{
+  "author": "夜風るる",
+  "build": {
+    "appId": "jp.yorukaze.muse-windows-wrapper",
+    "artifactName": "Muse-Windows-Portable-${version}.${ext}",
+    "copyright": "Copyright © 2026 夜風るる（個人利用・非公式）",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "assets/icon.ico",
+      "assets/icon.png",
+      "package.json",
+      "assets/splash.html"
+    ],
+    "productName": "Muse Windows版（非公式・個人利用）",
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "Muse-Windows-Portable-${version}.exe"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "yorukaze-luru",
+        "repo": "muse-windows"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Muse",
+      "artifactName": "Muse-Windows-Setup-${version}.${ext}",
+      "include": "build/installer.nsh"
+    },
+    "extraFiles": [
+      {
+        "from": "link-setup/Muse-Link-Setup.exe",
+        "to": "Muse-Link-Setup.exe"
+      }
+    ]
+  },
+  "description": "Muse Web版（muse.ai）を単独ウィンドウで表示するだけの非公式ラッパー。個人利用のみ・非公式（公式アプリではありません）。ログインは公式ページ上で行う。",
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "name": "muse-windows-wrapper",
+  "private": true,
+  "scripts": {
+    "dist": "electron-builder --win nsis",
+    "pack": "electron-builder --win nsis --dir",
+    "start": "electron .",
+    "dist:portable": "electron-builder --win portable",
+    "dist:win-dir": "electron-builder --win --dir"
+  },
+  "version": "1.0.0",
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  }
+}
