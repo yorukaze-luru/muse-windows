@@ -9,6 +9,9 @@
 ; uninstall entry (separate from this app, as designed). Either way the
 ; bundled exe is deleted from $INSTDIR afterwards.
 
+!include LogicLib.nsh
+!include nsDialogs.nsh
+
 Var /GLOBAL museLinkCheckboxHwnd
 Var /GLOBAL museLinkState
 
