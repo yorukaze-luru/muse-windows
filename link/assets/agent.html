@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Muse Link agent</title>
+<style>
+  body { font-family: "Segoe UI", "Yu Gothic UI", sans-serif; margin: 24px; color: #1c1c1e; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  p.sub { color: #555; margin: 0 0 18px; font-size: 13px; }
+  .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+  .row { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
+  .row:last-child { border-bottom: 0; }
+  .ok { color: #0a7d2c; font-weight: 600; }
+  .ng { color: #b00020; font-weight: 600; }
+  button { background: #2f6fed; color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font-size: 13px; cursor: pointer; margin-right: 8px; margin-top: 6px; }
+  button.sub2 { background: #eee; color: #222; }
+  button.danger { background: #b00020; }
+  label.opt { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.5; margin: 8px 0; }
+  p.note { font-size: 12px; color: #555; line-height: 1.6; }
+</style>
+</head>
+<body>
+<h1>Muse Link エージェント</h1>
+<p class="sub">土台フォルダ: <code>C:\MuseWorkspaces</code> / 専用ユーザー: <code>muselink</code></p>
+<p class="note">Muse Link は連携専用の別アプリです。Museアプリ（フォルダ版 v0.2.2）とは別物で、そちらは今まで通り使えます。このウィンドウを閉じてもエージェントはトレイに常駐します。完全に終了するには下のボタンか、トレイの右クリックメニューから「Quit Muse Link」を選んでください。</p>
+<button id="quitApp" class="sub2">Muse Linkを終了する</button>
+
+<div class="card">
+  <h2>接続状態</h2>
+  <div id="status">読み込み中...</div>
+  <button id="reload" class="sub2">再確認</button>
+  <button id="openBase" class="sub2">土台フォルダを開く</button>
+</div>
+
+<div class="card">
+  <h2>設定</h2>
+  <label class="opt"><input type="checkbox" id="autoStart">
+    <span>Windowsログイン時にエージェントを自動起動する</span></label>
+  <p class="note">作業はチャットごとに紐づけたフォルダの中だけです。紐づけのないチャットではPCに触りません。</p>
+</div>
+
+<div class="card">
+  <h2>連携を止める</h2>
+  <p class="note">鍵の無効化: Museの公開鍵を削除し、専用ユーザー muselink を無効化します。土台フォルダの中身、Tailscale、OpenSSH自体は残ります。UACが1回出ます。</p>
+  <button id="revoke" class="danger">Museの鍵を無効化する</button>
+  <span id="revokeMsg"></span>
+  <p class="note">アンインストール時の扱い: 既定はおすすめ方式（アプリ・専用ユーザー・鍵を消し、作業ファイルとTailscale / OpenSSHは残す）で、アンインストール前にこの画面の無効化を実行すると確実です。</p>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  function row(name, val) {
+    return '<div class="row"><span>' + name + '</span><span class="' + (val ? 'ok' : 'ng') + '">' + (val ? 'OK' : '未設定 / 停止') + '</span></div>';
+  }
+  async function load() {
+    const st = await window.link.getStatus();
+    $('status').innerHTML =
+      row('Tailscale インストール', st.tailscaleInstalled) +
+      row('OpenSSHサーバー 稼働', st.sshdRunning) +
+      row('土台フォルダ 存在', st.baseFolderExists) +
+      row('専用ユーザー muselink', st.linkUserExists) +
+      row('Museの公開鍵 登録', st.keyRegistered);
+    const s = await window.link.getSettings();
+    $('autoStart').checked = !!s.agentAutoStart;
+  }
+  $('quitApp').onclick = () => window.link.quitApp();
+  $('reload').onclick = load;
+  $('openBase').onclick = () => window.link.openBaseFolder();
+  $('autoStart').onchange = () => window.link.saveSettings({ agentAutoStart: $('autoStart').checked });
+  $('revoke').onclick = async () => {
+    if (!confirm('Museの鍵を無効化しますか？')) return;
+    $('revoke').disabled = true;
+    const r = await window.link.runRevoke();
+    $('revokeMsg').textContent = r.ok ? ' 無効化しました' : ' 失敗しました。もう一度試してください';
+    $('revoke').disabled = false;
+    load();
+  };
+  load();
+</script>
+</body>
+</html>
