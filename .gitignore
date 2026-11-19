@@ -1,0 +1,7 @@
+**/node_modules/
+**/dist/
+app/link-setup/*.exe
+/app/assets/icon.ico
+/app/assets/icon.png
+/link/assets/icon.ico
+/link/assets/icon.png
