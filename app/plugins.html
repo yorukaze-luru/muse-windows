@@ -8,8 +8,9 @@
   body { font-family: "Segoe UI", "Yu Gothic UI", sans-serif; margin: 0; color: #1c1c1e; background: #f7f7f8; }
   header { padding: 22px 28px 6px; }
   h1 { font-size: 21px; margin: 0 0 4px; }
-  p.sub { color: #666; font-size: 13px; margin: 0; }
-  main { padding: 16px 28px 28px; }
+  p.sub { color: #666; font-size: 13px; margin: 0; line-height: 1.6; }
+  p.sub code { background: #ececf0; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  main { padding: 16px 28px 28px; display: flex; flex-direction: column; gap: 14px; }
   .card { display: flex; gap: 16px; background: #fff; border: 1px solid #e2e2e6; border-radius: 12px; padding: 18px; }
   .icon { flex: 0 0 56px; width: 56px; height: 56px; border-radius: 12px; background: #eef3fe; display: flex; align-items: center; justify-content: center; }
   .body { flex: 1; min-width: 0; }
@@ -20,6 +21,7 @@
   .badge.stop { background: #eee; color: #555; }
   .badge.none { background: #fde8e8; color: #b00020; }
   .badge.upd { background: #fff3d6; color: #8a6100; }
+  .badge.legacy { background: #e8e4f8; color: #4b3a9e; }
   .desc { font-size: 13px; color: #444; line-height: 1.6; margin: 6px 0 2px; }
   .meta { font-size: 12px; color: #888; margin: 2px 0 0; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
@@ -28,115 +30,165 @@
   button.danger { background: #b00020; }
   button:disabled { opacity: 0.5; cursor: default; }
   .msg { font-size: 12.5px; color: #555; margin-top: 10px; min-height: 1.2em; }
+  .empty { color: #777; font-size: 13px; padding: 8px 2px; }
 </style>
 </head>
 <body>
 <header>
   <h1>プラグイン</h1>
-  <p class="sub">Muse 本体アプリに追加できるプラグインを管理します。配布とアップデートは GitHub Releases 経由です。</p>
+  <p class="sub">Muse 本体アプリに追加できるプラグインを管理します。アプリの実行フォルダにある <code>plugins</code> フォルダにプラグインのフォルダを入れると、ここに一覧で出てきます。<button class="sub2" id="openFolder" style="padding:4px 10px; font-size:12px; margin-left:6px;">plugins フォルダを開く</button></p>
 </header>
-<main>
-  <div class="card">
-    <div class="icon">
-      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#2f6fed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-    </div>
-    <div class="body">
-      <div class="title-row">
-        <span class="name">Muse Link</span>
-        <span id="badge" class="badge none">読み込み中</span>
-        <span id="updBadge" class="badge upd" style="display:none;">アップデートあり</span>
-      </div>
-      <p class="desc">Muse があなたのPCのフォルダで作業できるようにする連携エージェントです。別のアプリとしてインストールされ、本体アプリの起動中だけ動作します（本体を終了するとエージェントも終了します）。接続の土台（SSH / Tailscale）は Windows のサービスなので、エージェント停止中も接続自体は切れません。</p>
-      <p class="meta" id="meta"></p>
-      <div class="actions" id="actions"></div>
-      <p class="msg" id="msg"></p>
-    </div>
-  </div>
-</main>
+<main id="list"></main>
 <script>
   const $ = (id) => document.getElementById(id);
-  let busy = false;
-  let lastState = null;
+  const busy = {};   // id -> true while an action runs
+  const msgs = {};   // id -> message text
+  let lastData = null;
 
   function btn(label, cls, onclick) {
     const b = document.createElement('button');
     b.textContent = label;
     if (cls) b.className = cls;
-    b.disabled = busy;
     b.onclick = onclick;
     return b;
   }
 
-  async function act(fn, doneMsg) {
-    busy = true;
-    render(lastState);
+  function errText(r) {
+    if (r && r.mode === 'gui-launched') return 'アンインストーラーを開きました。画面の指示に従ってください。';
+    if (r && r.reason === 'no-release') return '配布元のフィードを取得できませんでした（未公開かオフライン）。';
+    if (r && r.reason === 'download-failed') return 'ダウンロードに失敗しました。通信環境を確認してもう一度試してください。';
+    if (r && r.reason === 'extract-failed') return 'ダウンロードしたファイルの解凍に失敗しました。もう一度試してください。';
+    if (r && r.reason === 'no-uninstaller') return 'アンインストーラーが見つかりませんでした。Windows の設定から削除してください。';
+    if (r && r.reason === 'delete-failed') return 'フォルダを削除できませんでした。プラグインを停止してからもう一度試してください。';
+    return 'うまくいきませんでした。もう一度試してください。';
+  }
+
+  async function act(id, fn, doneMsg) {
+    busy[id] = true;
+    render(lastData);
     const r = await fn();
-    busy = false;
-    if (r && r.ok) { $('msg').textContent = doneMsg || ''; }
-    else if (r && r.mode === 'gui-launched') { $('msg').textContent = 'インストーラーを開きました。画面の指示に従ってください。'; }
-    else if (r && r.reason === 'no-release') { $('msg').textContent = 'GitHub Releases に Link の配布がまだありません。'; }
-    else if (r && r.reason === 'download-failed') { $('msg').textContent = 'ダウンロードに失敗しました。通信環境を確認してもう一度試してください。'; }
-    else if (r && r.reason === 'extract-failed') { $('msg').textContent = 'ダウンロードしたファイルの解凍に失敗しました。もう一度試してください。'; }
-    else { $('msg').textContent = 'うまくいきませんでした。もう一度試してください。'; }
+    busy[id] = false;
+    msgs[id] = (r && r.ok) ? (doneMsg || '') : errText(r);
     refresh();
   }
 
-  function render(st) {
-    if (!st) return;
-    lastState = st;
-    const badge = $('badge');
-    const actions = $('actions');
-    actions.innerHTML = '';
-    $('updBadge').style.display = st.updateAvailable ? '' : 'none';
-    const downloading = st.downloadPercent !== null && st.downloadPercent !== undefined;
-    if (!st.installed) {
-      badge.className = 'badge none';
-      badge.textContent = '未インストール';
-      $('meta').textContent = st.latestVersion
-        ? ('最新版: v' + st.latestVersion + '（GitHub Releases）')
-        : '最新版の情報を取得できませんでした（リリース未公開かオフライン）';
-      if (st.latestVersion) {
-        const label = downloading ? ('ダウンロード中… ' + st.downloadPercent + '%') : (busy ? 'インストール中…' : 'インストール');
-        const b = btn(label, '', () => {
-          $('msg').textContent = 'GitHub Releases からダウンロードしてインストールします…';
-          act(() => window.plugins.installLink(), 'インストールしました');
-        });
-        b.disabled = busy || downloading;
-        actions.appendChild(b);
+  function card(p) {
+    const root = document.createElement('div');
+    root.className = 'card';
+    const isBusy = !!busy[p.id];
+    const downloading = p.downloadPercent !== null && p.downloadPercent !== undefined;
+
+    const icon = document.createElement('div');
+    icon.className = 'icon';
+    icon.innerHTML = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#2f6fed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+    root.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'body';
+    const row = document.createElement('div');
+    row.className = 'title-row';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = p.name;
+    row.appendChild(name);
+    const badge = document.createElement('span');
+    if (p.source === 'catalog') { badge.className = 'badge none'; badge.textContent = '未インストール'; }
+    else if (p.running) { badge.className = 'badge run'; badge.textContent = '稼働中'; }
+    else { badge.className = 'badge stop'; badge.textContent = '停止中'; }
+    row.appendChild(badge);
+    if (p.source === 'legacy') {
+      const b2 = document.createElement('span');
+      b2.className = 'badge legacy';
+      b2.textContent = '旧形式（インストール版）';
+      row.appendChild(b2);
+    }
+    if (p.updateAvailable) {
+      const b3 = document.createElement('span');
+      b3.className = 'badge upd';
+      b3.textContent = 'アップデートあり';
+      row.appendChild(b3);
+    }
+    body.appendChild(row);
+
+    if (p.description) {
+      const d = document.createElement('p');
+      d.className = 'desc';
+      d.textContent = p.description;
+      body.appendChild(d);
+    }
+    const meta = document.createElement('p');
+    meta.className = 'meta';
+    if (p.source === 'catalog') {
+      meta.textContent = p.latestVersion ? ('最新版: v' + p.latestVersion + '（GitHub Releases）') : '最新版の情報を取得できませんでした（リリース未公開かオフライン）';
+    } else {
+      let t = 'バージョン: v' + (p.version || '不明');
+      if (p.latestVersion) t += ' / 最新: v' + p.latestVersion;
+      if (p.source === 'folder') t += '（plugins フォルダ）';
+      meta.textContent = t;
+    }
+    body.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const addBtn = (label, cls, fn, doneMsg) => {
+      const b = btn(label, cls, () => act(p.id, fn, doneMsg));
+      b.disabled = isBusy || downloading;
+      actions.appendChild(b);
+    };
+    if (p.source === 'catalog') {
+      if (p.latestVersion) {
+        addBtn(downloading ? ('ダウンロード中… ' + p.downloadPercent + '%') : (isBusy ? 'インストール中…' : 'インストール'), '', () => window.plugins.install(p.id), 'インストールしました');
       }
     } else {
-      badge.className = 'badge ' + (st.running ? 'run' : 'stop');
-      badge.textContent = st.running ? '稼働中' : '停止中';
-      let meta = 'インストール済み: v' + (st.installedVersion || '不明');
-      if (st.latestVersion) meta += ' / 最新: v' + st.latestVersion;
-      $('meta').textContent = meta;
-      if (st.updateAvailable) {
-        const label = downloading ? ('ダウンロード中… ' + st.downloadPercent + '%') : (busy ? 'アップデート中…' : ('v' + st.latestVersion + ' にアップデート'));
-        const b = btn(label, '', () => {
-          $('msg').textContent = 'アップデートをダウンロードして適用します…';
-          act(() => window.plugins.updateLink(), 'アップデートしました');
-        });
-        b.disabled = busy || downloading;
-        actions.appendChild(b);
+      if (p.updateAvailable || p.source === 'legacy') {
+        const label = downloading ? ('ダウンロード中… ' + p.downloadPercent + '%') : (isBusy ? '処理中…' : (p.source === 'legacy' ? 'フォルダ版を入れる' : ('v' + p.latestVersion + ' にアップデート')));
+        addBtn(label, '', () => window.plugins.update(p.id), p.source === 'legacy' ? 'フォルダ版を入れました。旧形式は不要ならアンインストールしてください' : 'アップデートしました');
       }
-      if (st.running) {
-        actions.appendChild(btn('エージェントを開く', 'sub2', () => act(() => window.plugins.openLinkWindow(), '')));
-        actions.appendChild(btn('停止', 'sub2', () => act(() => window.plugins.stopLink(), '停止しました')));
+      if (p.running) {
+        addBtn('開く', 'sub2', () => window.plugins.open(p.id), '');
+        addBtn('停止', 'sub2', () => window.plugins.stop(p.id), '停止しました');
       } else {
-        actions.appendChild(btn('起動', '', () => act(() => window.plugins.startLink(), '起動しました')));
-        actions.appendChild(btn('エージェントを開く', 'sub2', () => act(() => window.plugins.openLinkWindow(), '')));
+        addBtn('起動', '', () => window.plugins.start(p.id), '起動しました');
+        addBtn('開く', 'sub2', () => window.plugins.open(p.id), '');
       }
-      actions.appendChild(btn('アンインストール', 'danger', () => {
-        if (!confirm('Muse Link をアンインストールしますか？')) return;
-        act(() => window.plugins.uninstallLink(), 'アンインストールしました');
-      }));
+      const un = btn('アンインストール', 'danger', () => {
+        if (!confirm(p.name + ' をアンインストールしますか？' + (p.source === 'folder' ? '（plugins フォルダから削除されます）' : ''))) return;
+        act(p.id, () => window.plugins.uninstall(p.id), 'アンインストールしました');
+      });
+      un.disabled = isBusy || downloading;
+      actions.appendChild(un);
     }
+    body.appendChild(actions);
+
+    const msg = document.createElement('p');
+    msg.className = 'msg';
+    msg.textContent = msgs[p.id] || '';
+    body.appendChild(msg);
+
+    root.appendChild(body);
+    return root;
+  }
+
+  function render(data) {
+    if (!data) return;
+    lastData = data;
+    const list = $('list');
+    list.innerHTML = '';
+    if (!data.plugins.length) {
+      const e = document.createElement('p');
+      e.className = 'empty';
+      e.textContent = 'プラグインがありません。';
+      list.appendChild(e);
+      return;
+    }
+    for (const p of data.plugins) list.appendChild(card(p));
   }
 
   async function refresh() {
-    const st = await window.plugins.getLinkState();
-    render(st);
+    const data = await window.plugins.list();
+    render(data);
   }
+  $('openFolder').onclick = () => window.plugins.openFolder();
   refresh();
   setInterval(refresh, 2000);
 </script>
