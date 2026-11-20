@@ -8,7 +8,7 @@
 // Closing a window does not quit the agent (it lives in the tray).
 // Quit explicitly from the tray menu or the "Quit Muse Link" button
 // in the agent / wizard windows.
-const { app, BrowserWindow, Menu, Tray, shell, ipcMain, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, Tray, shell, ipcMain, nativeImage, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -76,9 +76,9 @@ let wizardWindow = null;
 let agentWindow = null;
 let tray = null;
 
-function createLocalWindow(file, title, width, height) {
+function createLocalWindow(file, title, width, height, minWidth, minHeight) {
   const win = new BrowserWindow({
-    width, height, minWidth: width, minHeight: height,
+    width, height, minWidth: minWidth || width, minHeight: minHeight || height,
     title, icon: path.join(__dirname, 'assets', 'icon.png'),
     backgroundColor: '#ffffff', autoHideMenuBar: true,
     webPreferences: {
@@ -99,7 +99,7 @@ function openWizard() {
 
 function openAgent() {
   if (agentWindow && !agentWindow.isDestroyed()) { agentWindow.focus(); return agentWindow; }
-  agentWindow = createLocalWindow('agent.html', 'Muse Link agent', 640, 680);
+  agentWindow = createLocalWindow('agent.html', 'Muse Link agent', 660, 720, 560, 480);
   agentWindow.on('closed', () => { agentWindow = null; });
   return agentWindow;
 }
@@ -153,6 +153,16 @@ ipcMain.handle('link:get-settings', () => loadSettings());
 ipcMain.handle('link:get-status', () => getLinkStatus());
 ipcMain.handle('link:get-version', () => APP_VERSION);
 ipcMain.handle('link:quit', () => { quitApp(); return { ok: true }; });
+ipcMain.handle('link:uninstall', () => {
+  if (process.platform !== 'win32') return { ok: false, reason: 'not-windows' };
+  const uninstaller = path.join(path.dirname(process.execPath), 'Uninstall Muse Link.exe');
+  if (!fs.existsSync(uninstaller)) return { ok: false, reason: 'not-found' };
+  try {
+    spawn(uninstaller, [], { detached: true, windowsHide: false }).unref();
+    setTimeout(() => quitApp(), 500);
+    return { ok: true };
+  } catch (e) { return { ok: false, reason: String(e) }; }
+});
 ipcMain.handle('link:save-settings', (_e, patch) => {
   const next = saveSettings(patch || {});
   if (patch && Object.prototype.hasOwnProperty.call(patch, 'agentAutoStart')) applyAutoStart(patch.agentAutoStart);
@@ -182,6 +192,17 @@ ipcMain.handle('link:open-tailscale', () => {
 });
 ipcMain.handle('link:open-external', (_e, url) => { if (/^https:\/\//i.test(String(url))) shell.openExternal(String(url)); return { ok: true }; });
 ipcMain.handle('link:open-base-folder', () => shell.openPath(BASE_FOLDER));
+ipcMain.handle('link:fit-window', (e, h) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed()) return { ok: false };
+  const wanted = Math.ceil(Number(h) || 0);
+  if (!wanted) return { ok: false };
+  const wa = screen.getDisplayMatching(win.getBounds()).workArea;
+  const target = Math.max(400, Math.min(wanted, wa.height - 16));
+  const [w] = win.getContentSize();
+  win.setContentSize(w, target);
+  return { ok: true, height: target };
+});
 ipcMain.handle('link:setup-log', () => {
   try { return fs.readFileSync('C:\\ProgramData\\MuseLink\\setup.log', 'utf8').slice(-6000); } catch { return ''; }
 });
