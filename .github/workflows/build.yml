@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release run (build, create draft, publish automatically)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -41,20 +44,13 @@ jobs:
         working-directory: app
         run: npm ci
 
-      - name: Build app installers and publish draft release (tag builds)
-        if: startsWith(github.ref, 'refs/tags/')
-        working-directory: app
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --publish always
-
-      - name: Build app installers (manual runs)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Build app installers (normal build)
+        if: ${{ !inputs.release }}
         working-directory: app
         run: npx electron-builder --win --publish never
 
-      - name: Upload app installer artifacts (manual runs)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Upload app installer artifacts (normal build)
+        if: ${{ !inputs.release }}
         uses: actions/upload-artifact@v4
         with:
           name: app-installer
@@ -62,3 +58,21 @@ jobs:
             app/dist/*.exe
             app/dist/latest.yml
           if-no-files-found: ignore
+
+      - name: Build app installers and create release draft (release run)
+        if: ${{ inputs.release }}
+        working-directory: app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish always
+
+      - name: Publish the release (release run)
+        if: ${{ inputs.release }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $v = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
+          $rel = gh api "repos/${{ github.repository }}/releases" | ConvertFrom-Json | Where-Object { $_.tag_name -eq "v$v" -and $_.draft } | Select-Object -First 1
+          if (-not $rel) { throw "draft release v$v not found" }
+          gh api -X PATCH "repos/${{ github.repository }}/releases/$($rel.id)" -F draft=false -f target_commitish="$env:GITHUB_SHA"
