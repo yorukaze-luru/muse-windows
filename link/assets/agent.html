@@ -5,26 +5,31 @@
 <title>Muse Link agent</title>
 <style>
   body { font-family: "Segoe UI", "Yu Gothic UI", sans-serif; margin: 24px; color: #1c1c1e; }
-  h1 { font-size: 19px; margin: 0 0 4px; }
-  p.sub { color: #555; margin: 0 0 18px; font-size: 13px; }
-  .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
-  .card h2 { font-size: 15px; margin: 0 0 10px; }
-  .row { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: #555; margin: 0 0 14px; font-size: 13px; }
+  .card { border: 1px solid #ddd; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 16px; margin: 0 0 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center; font-size: 14px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
   .row:last-child { border-bottom: 0; }
-  .ok { color: #0a7d2c; font-weight: 600; }
-  .ng { color: #b00020; font-weight: 600; }
-  button { background: #2f6fed; color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font-size: 13px; cursor: pointer; margin-right: 8px; margin-top: 6px; }
+  .st { font-weight: 600; min-width: 110px; text-align: right; }
+  .ok { color: #0a7d2c; }
+  .ng { color: #b00020; }
+  .checking { color: #888; font-weight: 400; }
+  button { background: #2f6fed; color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font-size: 13px; cursor: pointer; margin-right: 8px; margin-top: 10px; }
+  button:disabled { opacity: 0.5; cursor: default; }
   button.sub2 { background: #eee; color: #222; }
   button.danger { background: #b00020; }
-  label.opt { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.5; margin: 8px 0; }
-  p.note { font-size: 12px; color: #555; line-height: 1.6; }
+  label.opt { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; line-height: 1.5; margin: 8px 0; }
+  p.note { font-size: 12.5px; color: #555; line-height: 1.7; margin: 10px 0 0; }
+  .stop-item { padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
+  .stop-item:last-child { border-bottom: 0; padding-bottom: 0; }
+  .stop-item:first-child { padding-top: 0; }
 </style>
 </head>
 <body>
 <h1>Muse Link エージェント</h1>
 <p class="sub">土台フォルダ: <code>C:\MuseWorkspaces</code> / 専用ユーザー: <code>muselink</code></p>
-<p class="note">Muse Link は連携専用の別アプリです。Museアプリ（フォルダ版 v0.2.2）とは別物で、そちらは今まで通り使えます。このウィンドウを閉じてもエージェントはトレイに常駐します。完全に終了するには下のボタンか、トレイの右クリックメニューから「Quit Muse Link」を選んでください。</p>
-<button id="quitApp" class="sub2">Muse Linkを終了する</button>
+<p class="note" style="margin: 0 0 16px;">Muse Link は連携専用の別アプリです（Museアプリ本体とは別に動きます）。このウィンドウを閉じてもエージェントはトレイに常駐します。停止するときは一番下の「Muse Linkを停止する」か、トレイの右クリックメニューから「Quit Muse Link」を選んでください。</p>
 
 <div class="card">
   <h2>接続状態</h2>
@@ -42,25 +47,61 @@
 
 <div class="card">
   <h2>連携を止める</h2>
-  <p class="note">鍵の無効化: Museの公開鍵を削除し、専用ユーザー muselink を無効化します。土台フォルダの中身、Tailscale、OpenSSH自体は残ります。UACが1回出ます。</p>
-  <button id="revoke" class="danger">Museの鍵を無効化する</button>
-  <span id="revokeMsg"></span>
-  <p class="note">アンインストール時の扱い: 既定はおすすめ方式（アプリ・専用ユーザー・鍵を消し、作業ファイルとTailscale / OpenSSHは残す）で、アンインストール前にこの画面の無効化を実行すると確実です。</p>
+
+  <div class="stop-item">
+    <button id="quitApp" class="sub2" style="margin-top: 0;">Muse Linkを停止する</button>
+    <p class="note">エージェントを終了します。接続の土台（鍵・専用ユーザー・土台フォルダ）は残るので、次に起動すればそのまま再開できます。</p>
+  </div>
+
+  <div class="stop-item">
+    <button id="revoke" class="danger" style="margin-top: 0;">Museの鍵を無効化する</button>
+    <span id="revokeMsg"></span>
+    <p class="note">Museの公開鍵を削除し、専用ユーザー muselink を無効化します。土台フォルダの中身、Tailscale、OpenSSH自体は残ります。UACが1回出ます。</p>
+  </div>
+
+  <div class="stop-item">
+    <button id="uninstall" class="danger" style="margin-top: 0;">Muse Linkをアンインストールする</button>
+    <span id="uninstallMsg"></span>
+    <p class="note">アプリを削除します。既定はおすすめ方式です（アプリ・専用ユーザー・鍵を消し、作業ファイルとTailscale / OpenSSHは残す）。アンインストール前に上の「鍵を無効化」を実行すると確実です。</p>
+  </div>
 </div>
 
 <script>
   const $ = (id) => document.getElementById(id);
-  function row(name, val) {
-    return '<div class="row"><span>' + name + '</span><span class="' + (val ? 'ok' : 'ng') + '">' + (val ? 'OK' : '未設定 / 停止') + '</span></div>';
+  const ITEMS = [
+    ['tailscaleInstalled', 'Tailscale インストール'],
+    ['sshdRunning', 'OpenSSHサーバー 稼働'],
+    ['baseFolderExists', '土台フォルダ 存在'],
+    ['linkUserExists', '専用ユーザー muselink'],
+    ['keyRegistered', 'Museの公開鍵 登録'],
+  ];
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function rowHtml(name, cls, text) {
+    return '<div class="row"><span>' + name + '</span><span class="st ' + cls + '">' + text + '</span></div>';
+  }
+  function renderChecking() {
+    $('status').innerHTML = ITEMS.map((it) => rowHtml(it[1], 'checking', '確認中…')).join('');
+  }
+  function setRow(i, val) {
+    const rows = $('status').children;
+    if (!rows[i]) return;
+    const span = rows[i].querySelector('.st');
+    span.className = 'st ' + (val ? 'ok' : 'ng');
+    span.textContent = val ? 'OK' : '未設定 / 停止';
+  }
+  function fitWindow() {
+    if (window.link.fitWindow) window.link.fitWindow(document.documentElement.scrollHeight + 6);
   }
   async function load() {
+    renderChecking();
+    fitWindow();
+    $('reload').disabled = true;
     const st = await window.link.getStatus();
-    $('status').innerHTML =
-      row('Tailscale インストール', st.tailscaleInstalled) +
-      row('OpenSSHサーバー 稼働', st.sshdRunning) +
-      row('土台フォルダ 存在', st.baseFolderExists) +
-      row('専用ユーザー muselink', st.linkUserExists) +
-      row('Museの公開鍵 登録', st.keyRegistered);
+    for (let i = 0; i < ITEMS.length; i++) {
+      setRow(i, !!st[ITEMS[i][0]]);
+      if (i < ITEMS.length - 1) await sleep(550);
+    }
+    $('reload').disabled = false;
     const s = await window.link.getSettings();
     $('autoStart').checked = !!s.agentAutoStart;
   }
@@ -75,6 +116,15 @@
     $('revokeMsg').textContent = r.ok ? ' 無効化しました' : ' 失敗しました。もう一度試してください';
     $('revoke').disabled = false;
     load();
+  };
+  $('uninstall').onclick = async () => {
+    if (!confirm('Muse Linkをアンインストールしますか？')) return;
+    $('uninstall').disabled = true;
+    const r = await window.link.uninstallApp();
+    if (!r.ok) {
+      $('uninstallMsg').textContent = ' アンインストーラーが見つかりませんでした。フォルダ版の場合はフォルダごと削除してください。';
+      $('uninstall').disabled = false;
+    }
   };
   load();
 </script>
