@@ -76,6 +76,7 @@
     else if (r && r.mode === 'gui-launched') { $('msg').textContent = 'インストーラーを開きました。画面の指示に従ってください。'; }
     else if (r && r.reason === 'no-release') { $('msg').textContent = 'GitHub Releases に Link の配布がまだありません。'; }
     else if (r && r.reason === 'download-failed') { $('msg').textContent = 'ダウンロードに失敗しました。通信環境を確認してもう一度試してください。'; }
+    else if (r && r.reason === 'extract-failed') { $('msg').textContent = 'ダウンロードしたファイルの解凍に失敗しました。もう一度試してください。'; }
     else { $('msg').textContent = 'うまくいきませんでした。もう一度試してください。'; }
     refresh();
   }
