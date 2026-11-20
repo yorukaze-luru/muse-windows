@@ -86,7 +86,8 @@ jobs:
           $v = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
           $tag = "v$v"
           Compress-Archive -Path "app/dist/Muse-Windows-Setup-$v.exe" -DestinationPath "app/dist/Muse-Windows-Setup-$v.zip" -Force
-          $assets = @("app/dist/Muse-Windows-Setup-$v.exe", "app/dist/Muse-Windows-Setup-$v.zip", "app/dist/latest.yml", "app/dist/Muse-Windows-Setup-$v.exe.blockmap")
+          Compress-Archive -Path "plugin-template/*" -DestinationPath "app/dist/Muse-Plugin-Template.zip" -Force
+          $assets = @("app/dist/Muse-Windows-Setup-$v.exe", "app/dist/Muse-Windows-Setup-$v.zip", "app/dist/latest.yml", "app/dist/Muse-Windows-Setup-$v.exe.blockmap", "app/dist/Muse-Plugin-Template.zip")
           gh release view $tag --json tagName 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $assets --clobber
