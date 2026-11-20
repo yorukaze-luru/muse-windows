@@ -10,20 +10,20 @@ Releases からどうぞ。
 
 | ファイル | 内容 |
 |---|---|
-| `Muse-Windows-Setup-x.y.z.exe` | Muse アプリのインストーラー。途中のページで **Muse Link エージェントを一緒にインストール** するか選べます |
-| `Muse-Link-Setup-x.y.z.exe` | Muse Link だけの単体インストーラー |
+| `Muse-Windows-Setup-x.y.z.exe` | Muse アプリのインストーラー |
 | `Muse-Windows-Portable-x.y.z.exe` | インストール不要の単一EXE版（自動更新なし） |
 
-## Muse Link とは
+## プラグイン（Muse Link）
 
-Muse が、あなたの PC の指定フォルダ（`C:\MuseWorkspaces`）の中で読み書きやコマンド実行をできるようにする連携エージェントです。接続は Tailscale + Windows 標準の OpenSSH で、専用ユーザー `muselink` と鍵認証だけを使います。初回起動時にセットアップウィザードが開きます。
+Muse があなたの PC のフォルダで作業できるようにする連携エージェント「Muse Link」は、別リポジトリ [yorukaze-luru/muse-link](https://github.com/yorukaze-luru/muse-link) で配布しています。
 
-Muse アプリとは別アプリとしてインストールされ、アンインストールも別々にできます。
+- インストール／アップデートは、本体アプリのメニュー「プラグイン」→「プラグイン管理を開く」から行います（muse-link の GitHub Releases から、ダウンロードとインストールまで本体アプリ内で完結します）
+- エージェントは本体アプリの起動中のみ動作し、本体を終了するとエージェントも終了します
 
 ## 自動更新
 
 - Muse アプリ: このリポジトリの Releases を参照して自動更新します（インストーラー版のみ）
-- Muse Link: 同じ Releases 内の Link 用フィード（link.yml）で自動更新します
+- Muse Link: muse-link リポジトリの Releases（link.yml フィード）をプラグインページが参照します
 - ポータブル版は自動更新しません
 
 ## 注意
@@ -35,5 +35,5 @@ Muse アプリとは別アプリとしてインストールされ、アンイン
 ## 構成
 
 - `app/` — Muse アプリ（Electron ラッパー）
-- `link/` — Muse Link エージェント
+- Muse Link は別リポジトリ（yorukaze-luru/muse-link）に分離しました
 - リリースは GitHub Actions でビルドしています（タグ `v*` で下書きリリースを作成）
