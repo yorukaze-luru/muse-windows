@@ -27,10 +27,6 @@ function saveSettings(patch) {
   try { fs.writeFileSync(settingsPath(), JSON.stringify(next, null, 2), 'utf8'); } catch {}
   return next;
 }
-function applyAutoStart(enabled) {
-  try { app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath }); } catch {}
-}
-
 // ---- PowerShell helpers (Windows only) ----
 function runPowerShell(script, elevated) {
   return new Promise((resolve) => {
@@ -132,21 +128,10 @@ function buildTray() {
   return tray;
 }
 
-// ---- auto update ----
-// Default: GitHub Releases of the distribution repo (publish config is
-// embedded by electron-builder as app-update.yml). An explicit generic
-// feed URL (env or settings) overrides it when set.
-function setupAutoUpdate() {
-  if (!app.isPackaged) return;
-  const feed = process.env.MUSE_LINK_UPDATE_URL || loadSettings().updateFeedUrl || '';
-  try {
-    const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload = true;
-    if (feed) autoUpdater.setFeedURL({ provider: 'generic', url: feed });
-    else autoUpdater.channel = 'link';
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-  } catch {}
-}
+// ---- updates ----
+// Updates are managed by the Muse app's plugin page (it downloads the
+// new Link setup from GitHub Releases and installs it), so the agent
+// itself does not self-update.
 
 // ---- IPC for local windows ----
 ipcMain.handle('link:get-settings', () => loadSettings());
@@ -165,7 +150,6 @@ ipcMain.handle('link:uninstall', () => {
 });
 ipcMain.handle('link:save-settings', (_e, patch) => {
   const next = saveSettings(patch || {});
-  if (patch && Object.prototype.hasOwnProperty.call(patch, 'agentAutoStart')) applyAutoStart(patch.agentAutoStart);
   if (tray && tray.refreshMenu) tray.refreshMenu();
   return next;
 });
@@ -217,10 +201,12 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 
 app.whenReady().then(() => {
+  // 起動・停止は Muse 本体アプリ（プラグイン管理）が担うようになったため、
+  // 旧方式のログイン時自動起動が残っていれば解除する（移行処理）。
+  try { app.setLoginItemSettings({ openAtLogin: false }); } catch {}
   buildTray();
   const s = loadSettings();
   if (!s.setupCompleted) openWizard(); else openAgent();
-  setupAutoUpdate();
 });
 
 app.on('second-instance', () => { openAgent(); });
