@@ -14,4 +14,6 @@ contextBridge.exposeInMainWorld('link', {
   setupLog: () => ipcRenderer.invoke('link:setup-log'),
   finishSetup: () => ipcRenderer.invoke('link:finish-setup'),
   quitApp: () => ipcRenderer.invoke('link:quit'),
+  uninstallApp: () => ipcRenderer.invoke('link:uninstall'),
+  fitWindow: (height) => ipcRenderer.invoke('link:fit-window', height),
 });
