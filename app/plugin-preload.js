@@ -1,12 +1,13 @@
-// Preload for the local plugin management window only.
+// Preload for the plugin management window only.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('plugins', {
-  getLinkState: () => ipcRenderer.invoke('plugins:get-link-state'),
-  installLink: () => ipcRenderer.invoke('plugins:install-link'),
-  updateLink: () => ipcRenderer.invoke('plugins:update-link'),
-  uninstallLink: () => ipcRenderer.invoke('plugins:uninstall-link'),
-  startLink: () => ipcRenderer.invoke('plugins:start-link'),
-  stopLink: () => ipcRenderer.invoke('plugins:stop-link'),
-  openLinkWindow: () => ipcRenderer.invoke('plugins:open-link-window'),
+  list: () => ipcRenderer.invoke('plugins:list'),
+  install: (id) => ipcRenderer.invoke('plugins:install', id),
+  update: (id) => ipcRenderer.invoke('plugins:update', id),
+  uninstall: (id) => ipcRenderer.invoke('plugins:uninstall', id),
+  start: (id) => ipcRenderer.invoke('plugins:start', id),
+  stop: (id) => ipcRenderer.invoke('plugins:stop', id),
+  open: (id) => ipcRenderer.invoke('plugins:open', id),
+  openFolder: () => ipcRenderer.invoke('plugins:open-folder'),
 });
