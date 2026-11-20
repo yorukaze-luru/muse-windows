@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: 'Release run (build, zip, publish releases automatically)'
+        description: 'Force a release run (normally automatic when the version is ahead of the latest release)'
         type: boolean
         default: false
 
@@ -44,13 +44,26 @@ jobs:
         working-directory: app
         run: npm ci
 
+      - name: Decide whether this push is a release
+        id: decide
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_RELEASE: ${{ inputs.release }}
+        run: |
+          $v = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
+          $rel = gh api "repos/${{ github.repository }}/releases" | ConvertFrom-Json
+          $main = $rel | Where-Object { $_.tag_name -match '^v[0-9]' } | Select-Object -First 1
+          $isRelease = ($env:INPUT_RELEASE -eq 'true') -or (-not $main) -or ($main.tag_name -ne "v$v")
+          "release=$($isRelease.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+
       - name: Build app installers (normal build)
-        if: ${{ !inputs.release }}
+        if: ${{ steps.decide.outputs.release != 'true' }}
         working-directory: app
         run: npx electron-builder --win --publish never
 
       - name: Upload app installer artifacts (normal build)
-        if: ${{ !inputs.release }}
+        if: ${{ steps.decide.outputs.release != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: app-installer
@@ -60,12 +73,12 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build NSIS installer (release run)
-        if: ${{ inputs.release }}
+        if: ${{ steps.decide.outputs.release == 'true' }}
         working-directory: app
         run: npx electron-builder --win nsis --publish never
 
       - name: Zip the setup and publish the release (release run)
-        if: ${{ inputs.release }}
+        if: ${{ steps.decide.outputs.release == 'true' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -84,12 +97,12 @@ jobs:
           }
 
       - name: Build portable exe (release run)
-        if: ${{ inputs.release }}
+        if: ${{ steps.decide.outputs.release == 'true' }}
         working-directory: app
         run: npx electron-builder --win portable --publish never
 
       - name: Zip the portable and publish its own release (release run)
-        if: ${{ inputs.release }}
+        if: ${{ steps.decide.outputs.release == 'true' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
