@@ -17,7 +17,8 @@
 ; to $TEMP and a detached PowerShell helper waits for THIS installer
 ; process to exit, then runs it silently and logs its exit code.
 ;
-; Every step is logged to %TEMP%\Muse-Windows-Setup-<pid>.log (one file
+; Every step is logged to a dedicated folder,
+; C:\ProgramData\MuseLink\logs\Muse-Windows-Setup-<pid>.log (one file
 ; per installer process; two installer instances writing one shared file
 ; overwrote each other's lines in the first logging build).
 
@@ -58,14 +59,16 @@ Function MuseLinkPageLeave
   Call MuseLinkLog
 FunctionEnd
 
-; Append one line (top of stack) to %TEMP%\Muse-Windows-Setup-<pid>.log.
+; Append one line (top of stack) to the dedicated log folder:
+; C:\ProgramData\MuseLink\logs\Muse-Windows-Setup-<pid>.log
 ; Preserves $0/$1/$2 across the call.
 Function MuseLinkLog
   Exch $0
   Push $1
   Push $2
   System::Call 'kernel32::GetCurrentProcessId() i .r2'
-  FileOpen $1 "$TEMP\Muse-Windows-Setup-$2.log" a
+  CreateDirectory "C:\ProgramData\MuseLink\logs"
+  FileOpen $1 "C:\ProgramData\MuseLink\logs\Muse-Windows-Setup-$2.log" a
   ${If} $1 != ""
     FileWrite $1 "$0$\r$\n"
     FileClose $1
@@ -96,7 +99,7 @@ FunctionEnd
         FileOpen $0 "$TEMP\Muse-Link-Deferred.ps1" w
         FileWrite $0 "Wait-Process -Id $museLinkPid -Timeout 180 -ErrorAction SilentlyContinue$\r$\n"
         FileWrite $0 "$$p = Start-Process -FilePath '$TEMP\Muse-Link-Setup-Deferred.exe' -ArgumentList '/S' -Wait -PassThru$\r$\n"
-        FileWrite $0 "Add-Content -Path '$TEMP\Muse-Windows-Setup-$museLinkPid.log' -Value ('MuseLink: deferred install exit code=' + $$p.ExitCode)$\r$\n"
+        FileWrite $0 "Add-Content -Path 'C:\ProgramData\MuseLink\logs\Muse-Windows-Setup-$museLinkPid.log' -Value ('MuseLink: deferred install exit code=' + $$p.ExitCode)$\r$\n"
         FileWrite $0 "Remove-Item '$TEMP\Muse-Link-Setup-Deferred.exe' -Force -ErrorAction SilentlyContinue$\r$\n"
         FileClose $0
         Exec 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$TEMP\Muse-Link-Deferred.ps1"'
