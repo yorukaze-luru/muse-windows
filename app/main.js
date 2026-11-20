@@ -172,18 +172,219 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// ---- プラグイン管理（Muse Link） ----
-// Muse Link は「プラグイン」として扱う：本体アプリが GitHub Releases
-// から Link のセットアップを取得してインストール／アップデートし、
-// エージェントの起動・停止を管理する。本体アプリが終了したら
-// エージェントも終了する。更新フィードは Link の自動更新と同じ
-// link.yml（最新リリース）を使い、プラグインページから更新できる。
-// 接続の土台（OpenSSH / Tailscale）は Windows のサービスなので、
-// エージェント停止中も Muse からの接続自体は切れない。
-let linkChild = null;
+// ---- プラグイン管理（plugins フォルダ方式） ----
+// 実行フォルダ直下の plugins/ にプラグインのフォルダを置くと、プラグイン
+// 管理ページが認識して一覧に出す。各フォルダには muse-plugin.json
+// （マニフェスト）が必要: { id, name, description, version, exe, autostart, feed }
+// - exe: フォルダ内の実行ファイル名（起動・停止の対象）
+// - autostart: true なら本体アプリの起動時に一緒に起動する
+// - feed: 更新フィード（yml）の URL。あれば新版チェックと、zip を取得して
+//   フォルダへ展開するインストール／アップデートができる
+// Muse Link は同梱カタログとして、未導入でもカードを出す（feed 固定）。
+// 旧形式（Windows にインストールされた Link）も検出して操作できる。
 let pluginsWindow = null;
-let linkInstallCache; // undefined = 未確認, null = 未インストール, それ以外 = { dir, exe, uninstaller, version }
+let linkChild = null; // 旧形式 Link の子プロセス
+let linkInstallCache; // undefined = 未確認, null = なし, それ以外 = { dir, exe, uninstaller, version }
+const pluginChildren = new Map(); // id -> child process（フォルダ版）
+const pluginDownloads = new Map(); // id -> percent
+const feedCache = new Map(); // feedUrl -> { at, info }
+const LINK_FEED_URL = 'https://github.com/yorukaze-luru/muse-link/releases/latest/download/link.yml';
+const PLUGIN_CATALOG = [
+  {
+    id: 'muse-link',
+    name: 'Muse Link',
+    description: 'Muse があなたのPCのフォルダで作業できるようにする連携エージェントです。本体アプリの起動中だけ動作します（本体を終了するとエージェントも終了します）。接続の土台（SSH / Tailscale）は Windows のサービスなので、エージェント停止中も接続自体は切れません。',
+    feed: LINK_FEED_URL,
+  },
+];
 
+function fetchText(url, redirectsLeft) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'muse-windows-app' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if ((redirectsLeft || 0) <= 0) { reject(new Error('too many redirects')); return; }
+        resolve(fetchText(res.headers.location, (redirectsLeft || 0) - 1));
+        return;
+      }
+      if (res.statusCode !== 200) { res.resume(); reject(new Error('http ' + res.statusCode)); return; }
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
+  });
+}
+function downloadFile(url, dest, onProgress, redirectsLeft) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'muse-windows-app' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if ((redirectsLeft || 0) <= 0) { reject(new Error('too many redirects')); return; }
+        resolve(downloadFile(res.headers.location, dest, onProgress, (redirectsLeft || 0) - 1));
+        return;
+      }
+      if (res.statusCode !== 200) { res.resume(); reject(new Error('http ' + res.statusCode)); return; }
+      const total = parseInt(res.headers['content-length'] || '0', 10);
+      let received = 0;
+      const out = fs.createWriteStream(dest);
+      res.on('data', (c) => {
+        received += c.length;
+        if (onProgress && total > 0) onProgress(Math.floor((received / total) * 100));
+      });
+      res.pipe(out);
+      out.on('finish', () => out.close(() => resolve()));
+      out.on('error', reject);
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+function semverGreater(a, b) {
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] > pb[i]) return true;
+    if (pa[i] < pb[i]) return false;
+  }
+  return false;
+}
+function isImageRunning(imageName) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') { resolve(false); return; }
+    execFile('tasklist', ['/FI', 'IMAGENAME eq ' + imageName, '/FO', 'CSV', '/NH'], { windowsHide: true }, (err, stdout) => {
+      resolve(!err && String(stdout).toLowerCase().includes(imageName.toLowerCase()));
+    });
+  });
+}
+function killImage(imageName, force) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') { resolve(); return; }
+    const args = ['/IM', imageName];
+    if (force) args.push('/F');
+    execFile('taskkill', args, { windowsHide: true }, () => resolve());
+  });
+}
+function runAndWait(file, args, timeoutMs) {
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawn(file, args, { stdio: 'ignore', windowsHide: false }); }
+    catch (e) { resolve(-1); return; }
+    const timer = setTimeout(() => { try { child.kill(); } catch {} resolve(-2); }, timeoutMs || 240000);
+    child.on('error', () => { clearTimeout(timer); resolve(-1); });
+    child.on('exit', (code) => { clearTimeout(timer); resolve(code == null ? -1 : code); });
+  });
+}
+function extractZip(zipPath, destDir) {
+  return new Promise((resolve) => {
+    try {
+      fs.rmSync(destDir, { recursive: true, force: true });
+      fs.mkdirSync(destDir, { recursive: true });
+    } catch {}
+    const script = "Expand-Archive -LiteralPath '" + zipPath.replace(/'/g, "''") + "' -DestinationPath '" + destDir.replace(/'/g, "''") + "' -Force";
+    execFile('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }, (err) => resolve(!err));
+  });
+}
+async function fetchFeedInfo(feedUrl, force) {
+  const now = Date.now();
+  const c = feedCache.get(feedUrl);
+  if (!force && c && now - c.at < 5 * 60 * 1000) return c.info;
+  let info = null;
+  try {
+    const yml = await fetchText(feedUrl, 5);
+    const version = (yml.match(/^version:\s*(\S+)\s*$/m) || [])[1];
+    const fileName = (yml.match(/^path:\s*(\S+)\s*$/m) || yml.match(/url:\s*(\S+)/) || [])[1];
+    if (version && fileName) {
+      const base = feedUrl.slice(0, feedUrl.lastIndexOf('/') + 1);
+      info = { version, fileName, url: base + fileName };
+    }
+  } catch {}
+  feedCache.set(feedUrl, { at: now, info });
+  return info;
+}
+
+// ---- フォルダ版プラグイン ----
+function getPluginsDir() {
+  const dir = path.join(path.dirname(app.getPath('exe')), 'plugins');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+function readManifest(dir) {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(dir, 'muse-plugin.json'), 'utf8'));
+    if (!m || !m.id || !m.exe) return null;
+    return m;
+  } catch { return null; }
+}
+function scanPlugins() {
+  const base = getPluginsDir();
+  const out = [];
+  let entries = [];
+  try { entries = fs.readdirSync(base, { withFileTypes: true }); } catch {}
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const dir = path.join(base, e.name);
+    const m = readManifest(dir);
+    if (!m) continue;
+    out.push({ manifest: m, dir, folderName: e.name, exePath: path.join(dir, m.exe) });
+  }
+  return out;
+}
+function findPlugin(id) { return scanPlugins().find((p) => p.manifest.id === id) || null; }
+async function startPlugin(id) {
+  const p = findPlugin(id);
+  if (!p) return { ok: false, reason: 'not-installed' };
+  const cur = pluginChildren.get(id);
+  if (cur && !cur.killed) return { ok: true, already: true };
+  try {
+    const child = spawn(p.exePath, [], { detached: false, stdio: 'ignore', windowsHide: false, cwd: p.dir });
+    pluginChildren.set(id, child);
+    child.on('exit', () => { if (pluginChildren.get(id) === child) pluginChildren.delete(id); });
+    child.on('error', () => { if (pluginChildren.get(id) === child) pluginChildren.delete(id); });
+    return { ok: true };
+  } catch (e) { return { ok: false, reason: String(e) }; }
+}
+async function stopPlugin(id) {
+  const p = findPlugin(id);
+  const child = pluginChildren.get(id);
+  if (child) { try { child.kill(); } catch {} pluginChildren.delete(id); }
+  if (p) {
+    const image = path.basename(p.manifest.exe);
+    await killImage(image, false);
+    if (await isImageRunning(image)) await killImage(image, true);
+  }
+  return { ok: true };
+}
+async function uninstallPlugin(id) {
+  const p = findPlugin(id);
+  if (!p) return { ok: true };
+  await stopPlugin(id);
+  try { fs.rmSync(p.dir, { recursive: true, force: true }); } catch {}
+  return findPlugin(id) ? { ok: false, reason: 'delete-failed' } : { ok: true };
+}
+async function installPluginFromFeed(id, feedUrl, folderName) {
+  const info = await fetchFeedInfo(feedUrl, true);
+  if (!info) return { ok: false, reason: 'no-release' };
+  const existing = findPlugin(id);
+  const wasRunning = existing ? await isImageRunning(path.basename(existing.manifest.exe)) : false;
+  if (existing) await stopPlugin(id);
+  const zipDest = path.join(app.getPath('temp'), info.fileName);
+  pluginDownloads.set(id, 0);
+  try {
+    await downloadFile(info.url, zipDest, (pct) => pluginDownloads.set(id, pct), 5);
+  } catch (e) {
+    pluginDownloads.delete(id);
+    return { ok: false, reason: 'download-failed' };
+  }
+  pluginDownloads.delete(id);
+  const destDir = path.join(getPluginsDir(), folderName);
+  if (!(await extractZip(zipDest, destDir))) return { ok: false, reason: 'extract-failed' };
+  const m = readManifest(destDir);
+  if (!m) return { ok: false, reason: 'extract-failed' };
+  if (m.autostart || wasRunning) startPlugin(id);
+  return { ok: true };
+}
+
+// ---- 旧形式 Muse Link（Windows インストール版）の検出と操作 ----
 function linkCandidateDirs() {
   const dirs = [];
   const local = process.env.LOCALAPPDATA;
@@ -240,66 +441,6 @@ async function findLinkInstall() {
   return null;
 }
 function invalidateLinkCache() { linkInstallCache = undefined; }
-const LINK_FEED_URL = 'https://github.com/yorukaze-luru/muse-link/releases/latest/download/link.yml';
-const LINK_LATEST_BASE = 'https://github.com/yorukaze-luru/muse-link/releases/latest/download/';
-let latestLinkInfo = null;
-let latestLinkCheckedAt = 0;
-let linkDownload = null; // { percent } while a setup download is running
-
-function fetchText(url, redirectsLeft) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'muse-windows-app' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        if ((redirectsLeft || 0) <= 0) { reject(new Error('too many redirects')); return; }
-        resolve(fetchText(res.headers.location, (redirectsLeft || 0) - 1));
-        return;
-      }
-      if (res.statusCode !== 200) { res.resume(); reject(new Error('http ' + res.statusCode)); return; }
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (c) => { data += c; });
-      res.on('end', () => resolve(data));
-    }).on('error', reject);
-  });
-}
-async function fetchLatestLinkInfo(force) {
-  const now = Date.now();
-  if (!force && latestLinkInfo && now - latestLinkCheckedAt < 5 * 60 * 1000) return latestLinkInfo;
-  try {
-    const yml = await fetchText(LINK_FEED_URL, 5);
-    const version = (yml.match(/^version:\s*(\S+)\s*$/m) || [])[1];
-    const fileName = (yml.match(/url:\s*(Muse-Link-Setup-\S+\.exe)/) || yml.match(/^path:\s*(Muse-Link-Setup-\S+\.exe)\s*$/m) || [])[1];
-    if (!version || !fileName) return null;
-    latestLinkInfo = { version, fileName, url: LINK_LATEST_BASE + fileName };
-    latestLinkCheckedAt = now;
-    return latestLinkInfo;
-  } catch { return null; }
-}
-function downloadFile(url, dest, onProgress, redirectsLeft) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'muse-windows-app' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        if ((redirectsLeft || 0) <= 0) { reject(new Error('too many redirects')); return; }
-        resolve(downloadFile(res.headers.location, dest, onProgress, (redirectsLeft || 0) - 1));
-        return;
-      }
-      if (res.statusCode !== 200) { res.resume(); reject(new Error('http ' + res.statusCode)); return; }
-      const total = parseInt(res.headers['content-length'] || '0', 10);
-      let received = 0;
-      const out = fs.createWriteStream(dest);
-      res.on('data', (c) => {
-        received += c.length;
-        if (onProgress && total > 0) onProgress(Math.floor((received / total) * 100));
-      });
-      res.pipe(out);
-      out.on('finish', () => out.close(() => resolve()));
-      out.on('error', reject);
-      res.on('error', reject);
-    }).on('error', reject);
-  });
-}
 function getInstalledLinkVersion(inst) {
   return new Promise((resolve) => {
     if (!inst) { resolve(null); return; }
@@ -313,41 +454,7 @@ function getInstalledLinkVersion(inst) {
     });
   });
 }
-function semverGreater(a, b) {
-  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < 3; i++) {
-    if (pa[i] > pb[i]) return true;
-    if (pa[i] < pb[i]) return false;
-  }
-  return false;
-}
-function isImageRunning(imageName) {
-  return new Promise((resolve) => {
-    if (process.platform !== 'win32') { resolve(false); return; }
-    execFile('tasklist', ['/FI', 'IMAGENAME eq ' + imageName, '/FO', 'CSV', '/NH'], { windowsHide: true }, (err, stdout) => {
-      resolve(!err && String(stdout).toLowerCase().includes(imageName.toLowerCase()));
-    });
-  });
-}
-async function getLinkState() {
-  const inst = await findLinkInstall();
-  const installed = !!inst;
-  const [running, installedVersion, latest] = await Promise.all([
-    installed ? isImageRunning('Muse Link.exe') : Promise.resolve(false),
-    getInstalledLinkVersion(inst),
-    fetchLatestLinkInfo(false),
-  ]);
-  return {
-    installed,
-    running,
-    installedVersion,
-    latestVersion: latest ? latest.version : null,
-    updateAvailable: !!(installed && installedVersion && latest && semverGreater(latest.version, installedVersion)),
-    downloadPercent: linkDownload ? linkDownload.percent : null,
-  };
-}
-async function startLink() {
+async function startLinkLegacy() {
   const inst = await findLinkInstall();
   if (!inst) return { ok: false, reason: 'not-installed' };
   if (linkChild && !linkChild.killed) return { ok: true, already: true };
@@ -358,74 +465,25 @@ async function startLink() {
     return { ok: true };
   } catch (e) { return { ok: false, reason: String(e) }; }
 }
-function killLinkProcesses(force) {
-  return new Promise((resolve) => {
-    if (process.platform !== 'win32') { resolve(); return; }
-    const args = ['/IM', 'Muse Link.exe', '/FI', 'USERNAME eq ' + (process.env.USERNAME || '')];
-    if (force) args.push('/F');
-    execFile('taskkill', args, { windowsHide: true }, () => resolve());
-  });
-}
-async function stopLink() {
+async function stopLinkLegacy() {
   if (linkChild) { try { linkChild.kill(); } catch {} linkChild = null; }
-  await killLinkProcesses(false);
-  if (await isImageRunning('Muse Link.exe')) await killLinkProcesses(true);
+  await killImage('Muse Link.exe', false);
+  if (await isImageRunning('Muse Link.exe')) await killImage('Muse Link.exe', true);
   return { ok: true };
 }
-function runAndWait(file, args, timeoutMs) {
-  return new Promise((resolve) => {
-    let child;
-    try { child = spawn(file, args, { stdio: 'ignore', windowsHide: false }); }
-    catch (e) { resolve(-1); return; }
-    const timer = setTimeout(() => { try { child.kill(); } catch {} resolve(-2); }, timeoutMs || 240000);
-    child.on('error', () => { clearTimeout(timer); resolve(-1); });
-    child.on('exit', (code) => { clearTimeout(timer); resolve(code == null ? -1 : code); });
-  });
-}
-function extractZip(zipPath, destDir) {
-  return new Promise((resolve) => {
-    try {
-      fs.rmSync(destDir, { recursive: true, force: true });
-      fs.mkdirSync(destDir, { recursive: true });
-    } catch {}
-    const script = "Expand-Archive -LiteralPath '" + zipPath.replace(/'/g, "''") + "' -DestinationPath '" + destDir.replace(/'/g, "''") + "' -Force";
-    execFile('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }, (err) => resolve(!err));
-  });
-}
-async function installLink() {
-  const info = await fetchLatestLinkInfo(true);
-  if (!info) return { ok: false, reason: 'no-release' };
-  const wasRunning = await isImageRunning('Muse Link.exe');
-  await stopLink();
-  // リリースでは exe は zip に入れて配布する（ダウンロード時のブロック回避）。
-  // link.yml からバージョンと exe 名を取り、zip を落として解凍してから実行する。
-  const zipName = info.fileName.replace(/\.exe$/i, '.zip');
-  const zipUrl = LINK_LATEST_BASE + zipName;
-  const zipDest = path.join(app.getPath('temp'), zipName);
-  linkDownload = { percent: 0 };
+async function openLinkLegacy() {
+  const inst = await findLinkInstall();
+  if (!inst) return { ok: false, reason: 'not-installed' };
   try {
-    await downloadFile(zipUrl, zipDest, (p) => { linkDownload = { percent: p }; }, 5);
-  } catch (e) {
-    linkDownload = null;
-    return { ok: false, reason: 'download-failed' };
-  }
-  linkDownload = null;
-  const extractDir = path.join(app.getPath('temp'), 'muse-link-setup');
-  if (!(await extractZip(zipDest, extractDir))) return { ok: false, reason: 'extract-failed' };
-  const setupExe = path.join(extractDir, info.fileName);
-  if (!fs.existsSync(setupExe)) return { ok: false, reason: 'extract-failed' };
-  await runAndWait(setupExe, ['/S']);
-  invalidateLinkCache();
-  if (await findLinkInstall()) {
-    if (wasRunning) startLink();
-    return { ok: true, mode: 'silent' };
-  }
-  // サイレントで入らなかった場合は通常の（画面が出る）インストーラーを開く。
-  try { spawn(setupExe, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); } catch {}
-  return { ok: false, mode: 'gui-launched' };
+    const child = spawn(inst.exe, [], { detached: false, stdio: 'ignore', windowsHide: false });
+    child.on('exit', () => { if (linkChild === child) linkChild = null; });
+    child.on('error', () => {});
+    if (!linkChild) linkChild = child;
+    return { ok: true };
+  } catch (e) { return { ok: false, reason: String(e) }; }
 }
-async function uninstallLink() {
-  await stopLink();
+async function uninstallLinkLegacy() {
+  await stopLinkLegacy();
   const inst = await findLinkInstall();
   if (!inst) return { ok: true };
   if (!fs.existsSync(inst.uninstaller)) return { ok: false, reason: 'no-uninstaller' };
@@ -435,18 +493,85 @@ async function uninstallLink() {
   try { spawn(inst.uninstaller, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); } catch {}
   return { ok: false, mode: 'gui-launched' };
 }
-async function openLinkWindow() {
-  const inst = await findLinkInstall();
-  if (!inst) return { ok: false, reason: 'not-installed' };
-  // エージェントは単一インスタンス制：起動済みなら既存側がウィンドウを開き、
-  // 未起動ならこのプロセスがそのままエージェントになる（監視対象に取り込む）。
-  try {
-    const child = spawn(inst.exe, [], { detached: false, stdio: 'ignore', windowsHide: false });
-    child.on('exit', () => { if (linkChild === child) linkChild = null; });
-    child.on('error', () => {});
-    if (!linkChild) linkChild = child;
-    return { ok: true };
-  } catch (e) { return { ok: false, reason: String(e) }; }
+
+// ---- プラグイン一覧と操作の振り分け ----
+async function getPluginsList() {
+  const list = [];
+  const seen = new Set();
+  for (const p of scanPlugins()) {
+    const m = p.manifest;
+    seen.add(m.id);
+    const running = await isImageRunning(path.basename(m.exe));
+    let latestVersion = null;
+    let updateAvailable = false;
+    if (m.feed) {
+      const info = await fetchFeedInfo(m.feed, false);
+      if (info) {
+        latestVersion = info.version;
+        updateAvailable = semverGreater(info.version, m.version || '0.0.0');
+      }
+    }
+    list.push({
+      id: m.id,
+      name: m.name || m.id,
+      description: m.description || '',
+      version: m.version || null,
+      source: 'folder',
+      running,
+      latestVersion,
+      updateAvailable,
+      downloadPercent: pluginDownloads.has(m.id) ? pluginDownloads.get(m.id) : null,
+    });
+  }
+  for (const c of PLUGIN_CATALOG) {
+    if (seen.has(c.id)) continue;
+    const info = await fetchFeedInfo(c.feed, false);
+    const legacy = c.id === 'muse-link' ? await findLinkInstall() : null;
+    if (legacy) {
+      const [running, ver] = await Promise.all([isImageRunning('Muse Link.exe'), getInstalledLinkVersion(legacy)]);
+      list.push({
+        id: c.id, name: c.name, description: c.description, version: ver,
+        source: 'legacy', running,
+        latestVersion: info ? info.version : null, updateAvailable: false,
+        downloadPercent: pluginDownloads.has(c.id) ? pluginDownloads.get(c.id) : null,
+      });
+    } else {
+      list.push({
+        id: c.id, name: c.name, description: c.description, version: null,
+        source: 'catalog', running: false,
+        latestVersion: info ? info.version : null, updateAvailable: false,
+        downloadPercent: pluginDownloads.has(c.id) ? pluginDownloads.get(c.id) : null,
+      });
+    }
+  }
+  return { pluginsDir: getPluginsDir(), plugins: list };
+}
+async function pluginInstall(id) {
+  const c = PLUGIN_CATALOG.find((x) => x.id === id);
+  if (c) return installPluginFromFeed(id, c.feed, id);
+  const p = findPlugin(id);
+  if (p && p.manifest.feed) return installPluginFromFeed(id, p.manifest.feed, p.folderName);
+  return { ok: false, reason: 'no-feed' };
+}
+async function pluginStart(id) {
+  if (findPlugin(id)) return startPlugin(id);
+  if (id === 'muse-link') return startLinkLegacy();
+  return { ok: false, reason: 'not-installed' };
+}
+async function pluginStop(id) {
+  if (findPlugin(id)) return stopPlugin(id);
+  if (id === 'muse-link') return stopLinkLegacy();
+  return { ok: true };
+}
+async function pluginOpen(id) {
+  if (findPlugin(id)) return startPlugin(id);
+  if (id === 'muse-link') return openLinkLegacy();
+  return { ok: false, reason: 'not-installed' };
+}
+async function pluginUninstall(id) {
+  if (findPlugin(id)) return uninstallPlugin(id);
+  if (id === 'muse-link') return uninstallLinkLegacy();
+  return { ok: true };
 }
 function openPluginsWindow() {
   if (pluginsWindow && !pluginsWindow.isDestroyed()) { pluginsWindow.focus(); return pluginsWindow; }
@@ -465,13 +590,14 @@ function openPluginsWindow() {
   return pluginsWindow;
 }
 
-ipcMain.handle('plugins:get-link-state', () => getLinkState());
-ipcMain.handle('plugins:install-link', () => installLink());
-ipcMain.handle('plugins:update-link', () => installLink());
-ipcMain.handle('plugins:uninstall-link', () => uninstallLink());
-ipcMain.handle('plugins:start-link', () => startLink());
-ipcMain.handle('plugins:stop-link', () => stopLink());
-ipcMain.handle('plugins:open-link-window', () => openLinkWindow());
+ipcMain.handle('plugins:list', () => getPluginsList());
+ipcMain.handle('plugins:install', (e, id) => pluginInstall(id));
+ipcMain.handle('plugins:update', (e, id) => pluginInstall(id));
+ipcMain.handle('plugins:uninstall', (e, id) => pluginUninstall(id));
+ipcMain.handle('plugins:start', (e, id) => pluginStart(id));
+ipcMain.handle('plugins:stop', (e, id) => pluginStop(id));
+ipcMain.handle('plugins:open', (e, id) => pluginOpen(id));
+ipcMain.handle('plugins:open-folder', () => shell.openPath(getPluginsDir()));
 
 // 自動更新：GitHub Releases（配布リポジトリ yorukaze-luru/muse-windows）の
 // latest.yml を electron-builder が埋め込んだ app-update.yml 経由で参照する。
@@ -489,15 +615,25 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   setupAutoUpdate();
-  // プラグイン（Muse Link）が入っていれば、エージェントを一緒に起動する。
-  findLinkInstall().then((inst) => { if (inst) startLink(); }).catch(() => {});
+  // autostart のフォルダ版プラグインを一緒に起動する。Muse Link の
+  // フォルダ版が無い場合は、旧形式（インストール版）があればそちらを起動する。
+  for (const p of scanPlugins()) { if (p.manifest.autostart) startPlugin(p.manifest.id); }
+  if (!findPlugin('muse-link')) {
+    findLinkInstall().then((inst) => { if (inst) startLinkLegacy(); }).catch(() => {});
+  }
 });
 
 // 本体アプリの終了に合わせて、プラグイン（Muse Link エージェント）も終了する。
 app.on('before-quit', () => {
+  for (const child of pluginChildren.values()) { try { child.kill(); } catch {} }
+  pluginChildren.clear();
   if (linkChild) { try { linkChild.kill(); } catch {} linkChild = null; }
   if (process.platform === 'win32') {
-    try { spawn('taskkill', ['/IM', 'Muse Link.exe', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch {}
+    const images = new Set(['Muse Link.exe']);
+    for (const p of scanPlugins()) images.add(path.basename(p.manifest.exe));
+    for (const image of images) {
+      try { spawn('taskkill', ['/IM', image, '/F'], { windowsHide: true, stdio: 'ignore' }); } catch {}
+    }
   }
 });
 
