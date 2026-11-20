@@ -382,28 +382,46 @@ function runAndWait(file, args, timeoutMs) {
     child.on('exit', (code) => { clearTimeout(timer); resolve(code == null ? -1 : code); });
   });
 }
+function extractZip(zipPath, destDir) {
+  return new Promise((resolve) => {
+    try {
+      fs.rmSync(destDir, { recursive: true, force: true });
+      fs.mkdirSync(destDir, { recursive: true });
+    } catch {}
+    const script = "Expand-Archive -LiteralPath '" + zipPath.replace(/'/g, "''") + "' -DestinationPath '" + destDir.replace(/'/g, "''") + "' -Force";
+    execFile('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }, (err) => resolve(!err));
+  });
+}
 async function installLink() {
   const info = await fetchLatestLinkInfo(true);
   if (!info) return { ok: false, reason: 'no-release' };
   const wasRunning = await isImageRunning('Muse Link.exe');
   await stopLink();
-  const dest = path.join(app.getPath('temp'), info.fileName);
+  // リリースでは exe は zip に入れて配布する（ダウンロード時のブロック回避）。
+  // link.yml からバージョンと exe 名を取り、zip を落として解凍してから実行する。
+  const zipName = info.fileName.replace(/\.exe$/i, '.zip');
+  const zipUrl = LINK_LATEST_BASE + zipName;
+  const zipDest = path.join(app.getPath('temp'), zipName);
   linkDownload = { percent: 0 };
   try {
-    await downloadFile(info.url, dest, (p) => { linkDownload = { percent: p }; }, 5);
+    await downloadFile(zipUrl, zipDest, (p) => { linkDownload = { percent: p }; }, 5);
   } catch (e) {
     linkDownload = null;
     return { ok: false, reason: 'download-failed' };
   }
   linkDownload = null;
-  await runAndWait(dest, ['/S']);
+  const extractDir = path.join(app.getPath('temp'), 'muse-link-setup');
+  if (!(await extractZip(zipDest, extractDir))) return { ok: false, reason: 'extract-failed' };
+  const setupExe = path.join(extractDir, info.fileName);
+  if (!fs.existsSync(setupExe)) return { ok: false, reason: 'extract-failed' };
+  await runAndWait(setupExe, ['/S']);
   invalidateLinkCache();
   if (await findLinkInstall()) {
     if (wasRunning) startLink();
     return { ok: true, mode: 'silent' };
   }
   // サイレントで入らなかった場合は通常の（画面が出る）インストーラーを開く。
-  try { spawn(dest, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); } catch {}
+  try { spawn(setupExe, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); } catch {}
   return { ok: false, mode: 'gui-launched' };
 }
 async function uninstallLink() {
