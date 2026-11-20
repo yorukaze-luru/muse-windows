@@ -40,8 +40,7 @@
 
 <div class="card">
   <h2>設定</h2>
-  <label class="opt"><input type="checkbox" id="autoStart">
-    <span>Windowsログイン時にエージェントを自動起動する</span></label>
+  <p class="note">エージェントの起動・停止は、Muse本体アプリのプラグインページで管理します。本体アプリが起動している間だけエージェントも動作し、本体を終了するとエージェントも終了します。</p>
   <p class="note">作業はチャットごとに紐づけたフォルダの中だけです。紐づけのないチャットではPCに触りません。</p>
 </div>
 
@@ -102,13 +101,10 @@
       if (i < ITEMS.length - 1) await sleep(550);
     }
     $('reload').disabled = false;
-    const s = await window.link.getSettings();
-    $('autoStart').checked = !!s.agentAutoStart;
   }
   $('quitApp').onclick = () => window.link.quitApp();
   $('reload').onclick = load;
   $('openBase').onclick = () => window.link.openBaseFolder();
-  $('autoStart').onchange = () => window.link.saveSettings({ agentAutoStart: $('autoStart').checked });
   $('revoke').onclick = async () => {
     if (!confirm('Museの鍵を無効化しますか？')) return;
     $('revoke').disabled = true;
