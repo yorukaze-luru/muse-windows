@@ -9,6 +9,8 @@
     },
     "files": [
       "main.js",
+      "plugin-preload.js",
+      "plugins.html",
       "assets/icon.ico",
       "assets/icon.png",
       "package.json",
@@ -50,13 +52,12 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Muse",
-      "artifactName": "Muse-Windows-Setup-${version}.${ext}",
-      "include": "build/installer.nsh"
+      "artifactName": "Muse-Windows-Setup-${version}.${ext}"
     },
-    "extraFiles": [
+    "extraResources": [
       {
         "from": "link-setup/Muse-Link-Setup.exe",
-        "to": "Muse-Link-Setup.exe"
+        "to": "plugins/Muse-Link-Setup.exe"
       }
     ]
   },
