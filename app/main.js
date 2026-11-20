@@ -64,7 +64,7 @@ function createWindow() {
     icon: path.join(__dirname, 'assets', 'icon.png'),
     backgroundColor: '#ffffff',
     show: false, // スプラッシュの準備ができてから表示する（クリック直後に窓を出すため）
-    autoHideMenuBar: true, // Altキーでメニューを表示
+    autoHideMenuBar: false, // Altキーでメニューを表示
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -180,17 +180,66 @@ function buildMenu() {
 // link.yml（最新リリース）を使い、プラグインページから更新できる。
 // 接続の土台（OpenSSH / Tailscale）は Windows のサービスなので、
 // エージェント停止中も Muse からの接続自体は切れない。
-const LINK_DIR = process.platform === 'win32'
-  ? path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Muse Link')
-  : '';
-const LINK_EXE = path.join(LINK_DIR, 'Muse Link.exe');
-const LINK_UNINSTALLER = path.join(LINK_DIR, 'Uninstall Muse Link.exe');
 let linkChild = null;
 let pluginsWindow = null;
+let linkInstallCache; // undefined = 未確認, null = 未インストール, それ以外 = { dir, exe, uninstaller, version }
 
-function linkInstalled() {
-  return process.platform === 'win32' && !!LINK_DIR && fs.existsSync(LINK_EXE);
+function linkCandidateDirs() {
+  const dirs = [];
+  const local = process.env.LOCALAPPDATA;
+  const pf = process.env.ProgramFiles;
+  const pf86 = process.env['ProgramFiles(x86)'];
+  if (local) dirs.push(path.join(local, 'Programs', 'Muse Link'), path.join(local, 'Programs', 'muse-link'));
+  if (pf) dirs.push(path.join(pf, 'Muse Link'));
+  if (pf86) dirs.push(path.join(pf86, 'Muse Link'));
+  return dirs;
 }
+function queryLinkRegistry() {
+  return new Promise((resolve) => {
+    const script = "$keys = @('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); "
+      + "$e = Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Muse Link' } | Select-Object -First 1; "
+      + "if ($e) { Write-Output $e.InstallLocation; Write-Output $e.DisplayVersion; Write-Output $e.UninstallString }";
+    execFile('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      const lines = String(stdout).split(/\r?\n/).map((s) => s.trim());
+      const installLocation = lines[0] || '';
+      const displayVersion = lines[1] || '';
+      const uninstallString = lines[2] || '';
+      if (!installLocation && !uninstallString) { resolve(null); return; }
+      resolve({ installLocation, displayVersion, uninstallString });
+    });
+  });
+}
+async function findLinkInstall() {
+  if (process.platform !== 'win32') return null;
+  if (linkInstallCache !== undefined) return linkInstallCache;
+  const reg = await queryLinkRegistry();
+  const dirs = [];
+  if (reg) {
+    if (reg.installLocation) dirs.push(reg.installLocation);
+    if (reg.uninstallString) {
+      const cleaned = reg.uninstallString.replace(/^"|"$/g, '');
+      const m = cleaned.match(/^(.*)[\\/][^\\/]+$/);
+      if (m) dirs.push(m[1]);
+    }
+  }
+  dirs.push(...linkCandidateDirs());
+  for (const dir of dirs) {
+    const exe = path.join(dir, 'Muse Link.exe');
+    if (fs.existsSync(exe)) {
+      linkInstallCache = {
+        dir,
+        exe,
+        uninstaller: path.join(dir, 'Uninstall Muse Link.exe'),
+        version: reg && reg.displayVersion ? reg.displayVersion : null,
+      };
+      return linkInstallCache;
+    }
+  }
+  linkInstallCache = null;
+  return null;
+}
+function invalidateLinkCache() { linkInstallCache = undefined; }
 const LINK_FEED_URL = 'https://github.com/yorukaze-luru/muse-windows/releases/latest/download/link.yml';
 const LINK_LATEST_BASE = 'https://github.com/yorukaze-luru/muse-windows/releases/latest/download/';
 let latestLinkInfo = null;
@@ -251,13 +300,15 @@ function downloadFile(url, dest, onProgress, redirectsLeft) {
     }).on('error', reject);
   });
 }
-function getInstalledLinkVersion() {
+function getInstalledLinkVersion(inst) {
   return new Promise((resolve) => {
-    if (!linkInstalled()) { resolve(null); return; }
-    const script = "(Get-Item -LiteralPath '" + LINK_EXE.replace(/'/g, "''") + "').VersionInfo.ProductVersion";
+    if (!inst) { resolve(null); return; }
+    if (inst.version) { resolve(inst.version); return; }
+    const script = "(Get-Item -LiteralPath '" + inst.exe.replace(/'/g, "''") + "').VersionInfo.ProductVersion";
     execFile('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }, (err, stdout) => {
       if (err) { resolve(null); return; }
       const m = String(stdout).match(/\d+\.\d+\.\d+/);
+      if (m) inst.version = m[0];
       resolve(m ? m[0] : null);
     });
   });
@@ -280,10 +331,11 @@ function isImageRunning(imageName) {
   });
 }
 async function getLinkState() {
-  const installed = linkInstalled();
+  const inst = await findLinkInstall();
+  const installed = !!inst;
   const [running, installedVersion, latest] = await Promise.all([
     installed ? isImageRunning('Muse Link.exe') : Promise.resolve(false),
-    getInstalledLinkVersion(),
+    getInstalledLinkVersion(inst),
     fetchLatestLinkInfo(false),
   ]);
   return {
@@ -295,11 +347,12 @@ async function getLinkState() {
     downloadPercent: linkDownload ? linkDownload.percent : null,
   };
 }
-function startLink() {
-  if (!linkInstalled()) return { ok: false, reason: 'not-installed' };
+async function startLink() {
+  const inst = await findLinkInstall();
+  if (!inst) return { ok: false, reason: 'not-installed' };
   if (linkChild && !linkChild.killed) return { ok: true, already: true };
   try {
-    linkChild = spawn(LINK_EXE, [], { detached: false, stdio: 'ignore', windowsHide: false });
+    linkChild = spawn(inst.exe, [], { detached: false, stdio: 'ignore', windowsHide: false });
     linkChild.on('exit', () => { linkChild = null; });
     linkChild.on('error', () => { linkChild = null; });
     return { ok: true };
@@ -344,7 +397,8 @@ async function installLink() {
   }
   linkDownload = null;
   await runAndWait(dest, ['/S']);
-  if (linkInstalled()) {
+  invalidateLinkCache();
+  if (await findLinkInstall()) {
     if (wasRunning) startLink();
     return { ok: true, mode: 'silent' };
   }
@@ -354,18 +408,22 @@ async function installLink() {
 }
 async function uninstallLink() {
   await stopLink();
-  if (!fs.existsSync(LINK_UNINSTALLER)) return { ok: false, reason: 'no-uninstaller' };
-  await runAndWait(LINK_UNINSTALLER, ['/S']);
-  if (!linkInstalled()) return { ok: true };
-  try { spawn(LINK_UNINSTALLER, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); } catch {}
+  const inst = await findLinkInstall();
+  if (!inst) return { ok: true };
+  if (!fs.existsSync(inst.uninstaller)) return { ok: false, reason: 'no-uninstaller' };
+  await runAndWait(inst.uninstaller, ['/S']);
+  invalidateLinkCache();
+  if (!(await findLinkInstall())) return { ok: true };
+  try { spawn(inst.uninstaller, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref(); } catch {}
   return { ok: false, mode: 'gui-launched' };
 }
-function openLinkWindow() {
-  if (!linkInstalled()) return { ok: false, reason: 'not-installed' };
+async function openLinkWindow() {
+  const inst = await findLinkInstall();
+  if (!inst) return { ok: false, reason: 'not-installed' };
   // エージェントは単一インスタンス制：起動済みなら既存側がウィンドウを開き、
   // 未起動ならこのプロセスがそのままエージェントになる（監視対象に取り込む）。
   try {
-    const child = spawn(LINK_EXE, [], { detached: false, stdio: 'ignore', windowsHide: false });
+    const child = spawn(inst.exe, [], { detached: false, stdio: 'ignore', windowsHide: false });
     child.on('exit', () => { if (linkChild === child) linkChild = null; });
     child.on('error', () => {});
     if (!linkChild) linkChild = child;
@@ -414,7 +472,7 @@ app.whenReady().then(() => {
   createWindow();
   setupAutoUpdate();
   // プラグイン（Muse Link）が入っていれば、エージェントを一緒に起動する。
-  if (linkInstalled()) startLink();
+  findLinkInstall().then((inst) => { if (inst) startLink(); }).catch(() => {});
 });
 
 // 本体アプリの終了に合わせて、プラグイン（Muse Link エージェント）も終了する。
