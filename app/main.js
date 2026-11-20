@@ -240,8 +240,8 @@ async function findLinkInstall() {
   return null;
 }
 function invalidateLinkCache() { linkInstallCache = undefined; }
-const LINK_FEED_URL = 'https://github.com/yorukaze-luru/muse-windows/releases/latest/download/link.yml';
-const LINK_LATEST_BASE = 'https://github.com/yorukaze-luru/muse-windows/releases/latest/download/';
+const LINK_FEED_URL = 'https://github.com/yorukaze-luru/muse-link/releases/latest/download/link.yml';
+const LINK_LATEST_BASE = 'https://github.com/yorukaze-luru/muse-link/releases/latest/download/';
 let latestLinkInfo = null;
 let latestLinkCheckedAt = 0;
 let linkDownload = null; // { percent } while a setup download is running
