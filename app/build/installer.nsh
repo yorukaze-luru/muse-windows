@@ -4,18 +4,22 @@
 ; CI into link-setup/ and bundled into this installer as an extra file
 ; (see "extraFiles" in package.json), so it lands in $INSTDIR during
 ; install. This script adds one custom page with a single checkbox.
-; If the user leaves it checked, the Link installer runs silently at the
-; end of the main install; Link then exists as its own app with its own
-; uninstall entry (separate from this app, as designed). Either way the
-; bundled exe is deleted from $INSTDIR afterwards.
+; If the user leaves it checked, the Link installer runs silently and
+; Link then exists as its own app with its own uninstall entry (separate
+; from this app, as designed).
 ;
-; Diagnosis log (2026-11-20: the 1.0.0 test install showed the page and a
-; checked box, yet Link was not installed afterwards): every step writes
-; one line to %TEMP%\Muse-Windows-Setup.log, so a single log read tells
-; which of the three suspects failed — bundled exe missing from $INSTDIR,
-; checkbox state not CHECKED at install time, or the silent install's
-; ExecWait exit code. DetailPrint mirrors the same lines in the
-; installer's detail view.
+; Diagnosis (2026-11-20): the first 1.0.0 test install showed the page
+; and a checked box, yet Link was not installed. A logging build then
+; proved the checkbox state and the bundled exe were both fine, but the
+; silent install crashed: ExecWait returned -1073741819 (0xC0000005,
+; access violation). Running the bundled installer from inside this
+; installer is therefore avoided now. Instead the bundled exe is copied
+; to $TEMP and a detached PowerShell helper waits for THIS installer
+; process to exit, then runs it silently and logs its exit code.
+;
+; Every step is logged to %TEMP%\Muse-Windows-Setup-<pid>.log (one file
+; per installer process; two installer instances writing one shared file
+; overwrote each other's lines in the first logging build).
 
 !include LogicLib.nsh
 !include nsDialogs.nsh
@@ -26,6 +30,7 @@
 !ifndef BUILD_UNINSTALLER
 Var /GLOBAL museLinkCheckboxHwnd
 Var /GLOBAL museLinkState
+Var /GLOBAL museLinkPid
 
 !macro customPageAfterChangeDir
   Page custom MuseLinkPageCreate MuseLinkPageLeave
@@ -53,41 +58,61 @@ Function MuseLinkPageLeave
   Call MuseLinkLog
 FunctionEnd
 
-; Append one line (top of stack) to %TEMP%\Muse-Windows-Setup.log.
-; Preserves $0/$1 across the call.
+; Append one line (top of stack) to %TEMP%\Muse-Windows-Setup-<pid>.log.
+; Preserves $0/$1/$2 across the call.
 Function MuseLinkLog
   Exch $0
   Push $1
-  FileOpen $1 "$TEMP\Muse-Windows-Setup.log" a
+  Push $2
+  System::Call 'kernel32::GetCurrentProcessId() i .r2'
+  FileOpen $1 "$TEMP\Muse-Windows-Setup-$2.log" a
   ${If} $1 != ""
     FileWrite $1 "$0$\r$\n"
     FileClose $1
   ${EndIf}
+  Pop $2
   Pop $1
   Pop $0
 FunctionEnd
 !endif
 
 !macro customInstall
-  Push "MuseLink: customInstall start, INSTDIR=$INSTDIR"
+  System::Call 'kernel32::GetCurrentProcessId() i .r0'
+  StrCpy $museLinkPid $0
+  Push "MuseLink: customInstall start, INSTDIR=$INSTDIR, pid=$museLinkPid"
   Call MuseLinkLog
   ${If} ${FileExists} "$INSTDIR\Muse-Link-Setup.exe"
     Push "MuseLink: bundled exe found in INSTDIR"
     Call MuseLinkLog
-    DetailPrint "Muse Link: bundled installer found, checkbox state=$museLinkState"
     ${If} $museLinkState == ${BST_CHECKED}
-      Push "MuseLink: checkbox checked, running silent install"
-      Call MuseLinkLog
-      ExecWait '"$INSTDIR\Muse-Link-Setup.exe" /S' $0
-      Push "MuseLink: ExecWait exit code=$0"
-      Call MuseLinkLog
-      DetailPrint "Muse Link: silent install exit code=$0"
+      DetailPrint "Muse Link: deferred install scheduled (runs after this installer exits)"
+      CopyFiles /SILENT "$INSTDIR\Muse-Link-Setup.exe" "$TEMP\Muse-Link-Setup-Deferred.exe"
+      Delete "$INSTDIR\Muse-Link-Setup.exe"
+      ${If} ${FileExists} "$TEMP\Muse-Link-Setup-Deferred.exe"
+        Push "MuseLink: checkbox checked, deferred copy ready in TEMP"
+        Call MuseLinkLog
+        ; Write the deferred helper script. In these NSIS strings, $$ is a
+        ; literal $ for PowerShell, while $TEMP / $museLinkPid expand here.
+        FileOpen $0 "$TEMP\Muse-Link-Deferred.ps1" w
+        FileWrite $0 "Wait-Process -Id $museLinkPid -Timeout 180 -ErrorAction SilentlyContinue$\r$\n"
+        FileWrite $0 "$$p = Start-Process -FilePath '$TEMP\Muse-Link-Setup-Deferred.exe' -ArgumentList '/S' -Wait -PassThru$\r$\n"
+        FileWrite $0 "Add-Content -Path '$TEMP\Muse-Windows-Setup-$museLinkPid.log' -Value ('MuseLink: deferred install exit code=' + $$p.ExitCode)$\r$\n"
+        FileWrite $0 "Remove-Item '$TEMP\Muse-Link-Setup-Deferred.exe' -Force -ErrorAction SilentlyContinue$\r$\n"
+        FileClose $0
+        Exec 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$TEMP\Muse-Link-Deferred.ps1"'
+        Push "MuseLink: deferred helper launched"
+        Call MuseLinkLog
+      ${Else}
+        Push "MuseLink: deferred copy FAILED"
+        Call MuseLinkLog
+        DetailPrint "Muse Link: could not stage the bundled installer"
+      ${EndIf}
     ${Else}
       Push "MuseLink: checkbox unchecked, skipping install (state=$museLinkState)"
       Call MuseLinkLog
       DetailPrint "Muse Link: checkbox unchecked, skipping install"
+      Delete "$INSTDIR\Muse-Link-Setup.exe"
     ${EndIf}
-    Delete "$INSTDIR\Muse-Link-Setup.exe"
   ${Else}
     Push "MuseLink: bundled exe NOT found in INSTDIR"
     Call MuseLinkLog
