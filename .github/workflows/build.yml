@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  app-installer:
+  build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,88 +33,9 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
-      - name: Restore icons from base64
-        working-directory: app
-        shell: pwsh
-        run: |
-          [IO.File]::WriteAllBytes('assets/icon.ico', [Convert]::FromBase64String((Get-Content 'assets/icon.ico.b64' -Raw)))
-          [IO.File]::WriteAllBytes('assets/icon.png', [Convert]::FromBase64String((Get-Content 'assets/icon.png.b64' -Raw)))
-
-      - name: Install app dependencies
-        working-directory: app
-        run: npm ci
-
-      - name: Decide whether this push is a release
-        id: decide
+      - name: Build and release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_RELEASE: ${{ inputs.release }}
-        run: |
-          $v = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
-          $rel = gh api "repos/${{ github.repository }}/releases" | ConvertFrom-Json
-          $main = $rel | Where-Object { $_.tag_name -match '^v[0-9]' } | Select-Object -First 1
-          $isRelease = ($env:INPUT_RELEASE -eq 'true') -or (-not $main) -or ($main.tag_name -ne "v$v")
-          "release=$($isRelease.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-
-      - name: Build app installers (normal build)
-        if: ${{ steps.decide.outputs.release != 'true' }}
-        working-directory: app
-        run: npx electron-builder --win --publish never
-
-      - name: Upload app installer artifacts (normal build)
-        if: ${{ steps.decide.outputs.release != 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-installer
-          path: |
-            app/dist/*.exe
-            app/dist/latest.yml
-          if-no-files-found: ignore
-
-      - name: Build NSIS installer (release run)
-        if: ${{ steps.decide.outputs.release == 'true' }}
-        working-directory: app
-        run: npx electron-builder --win nsis --publish never
-
-      - name: Zip the setup and publish the release (release run)
-        if: ${{ steps.decide.outputs.release == 'true' }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $v = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
-          $tag = "v$v"
-          Compress-Archive -Path "app/dist/Muse-Windows-Setup-$v.exe" -DestinationPath "app/dist/Muse-Windows-Setup-$v.zip" -Force
-          Compress-Archive -Path "plugin-template/*" -DestinationPath "app/dist/Muse-Plugin-Template.zip" -Force
-          $assets = @("app/dist/Muse-Windows-Setup-$v.exe", "app/dist/Muse-Windows-Setup-$v.zip", "app/dist/latest.yml", "app/dist/Muse-Windows-Setup-$v.exe.blockmap", "app/dist/Muse-Plugin-Template.zip")
-          gh release view $tag --json tagName 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $assets --clobber
-            gh release edit $tag --title "Muse Windows v$v" --notes-file RELEASE_NOTES.md
-            gh release delete-asset $tag "Muse-Windows-Portable-$v.exe" -y 2>$null | Out-Null
-          } else {
-            gh release create $tag --title "Muse Windows v$v" --notes-file RELEASE_NOTES.md $assets
-          }
-
-      - name: Build portable exe (release run)
-        if: ${{ steps.decide.outputs.release == 'true' }}
-        working-directory: app
-        run: npx electron-builder --win portable --publish never
-
-      - name: Zip the portable and publish its own release (release run)
-        if: ${{ steps.decide.outputs.release == 'true' }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $v = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
-          $tag = "portable-v$v"
-          Compress-Archive -Path "app/dist/Muse-Windows-Portable-$v.exe" -DestinationPath "app/dist/Muse-Windows-Portable-$v.zip" -Force
-          gh release view $tag --json tagName 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag "app/dist/Muse-Windows-Portable-$v.zip" --clobber
-            gh release edit $tag --title "Muse Windows Portable v$v"
-          } else {
-            gh release create $tag --title "Muse Windows Portable v$v" --notes "Portable edition: single exe in a zip. No installation, no auto-update." "app/dist/Muse-Windows-Portable-$v.zip"
-          }
+          FORCE_RELEASE: ${{ inputs.release }}
+        run: ./scripts/release.ps1
