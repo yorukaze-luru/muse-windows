@@ -1,9 +1,5 @@
 **/node_modules/
 **/dist/
-app/link-setup/*.exe
 /app/assets/icon.ico
 /app/assets/icon.png
-/link/assets/icon.ico
-/link/assets/icon.png
 /app/package-lock.json
-/link/package-lock.json
