@@ -1,0 +1,9 @@
+{
+  "id": "example-plugin",
+  "name": "Example Plugin",
+  "description": "プラグインのサンプルです。exe を自分のプログラムに差し替えて使ってください。",
+  "version": "0.1.0",
+  "exe": "example-agent.exe",
+  "autostart": false,
+  "feed": ""
+}
