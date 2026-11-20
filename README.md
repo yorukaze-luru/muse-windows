@@ -10,15 +10,28 @@ Releases からどうぞ。
 
 | ファイル | 内容 |
 |---|---|
-| `Muse-Windows-Setup-x.y.z.exe` | Muse アプリのインストーラー |
-| `Muse-Windows-Portable-x.y.z.exe` | インストール不要の単一EXE版（自動更新なし） |
+| `Muse-Windows-Setup-x.y.z.zip` | Muse アプリのインストーラー（zip を解凍して実行。自動更新あり） |
+| `Muse-Windows-Portable-x.y.z.zip` | インストール不要の単一EXE版（別リリース `portable-vx.y.z`、自動更新なし） |
+| `Muse-Plugin-Template.zip` | プラグイン作成用のサンプル一式 |
+
+## ドキュメント（Wiki）
+
+使い方の詳細は [Wiki](https://github.com/yorukaze-luru/muse-windows/wiki) にあります。
+
+- [インストールと初期セットアップ](https://github.com/yorukaze-luru/muse-windows/wiki/インストールと初期セットアップ)
+- [Muse Link のセットアップ](https://github.com/yorukaze-luru/muse-windows/wiki/Muse-Link-のセットアップ)
+- [プラグインの使い方](https://github.com/yorukaze-luru/muse-windows/wiki/プラグインの使い方)
+- [プラグインの作り方](https://github.com/yorukaze-luru/muse-windows/wiki/プラグインの作り方)
+- [トラブルシューティング](https://github.com/yorukaze-luru/muse-windows/wiki/トラブルシューティング)
 
 ## プラグイン（Muse Link）
 
 Muse があなたの PC のフォルダで作業できるようにする連携エージェント「Muse Link」は、別リポジトリ [yorukaze-luru/muse-link](https://github.com/yorukaze-luru/muse-link) で配布しています。
 
-- インストール／アップデートは、本体アプリのメニュー「プラグイン」→「プラグイン管理を開く」から行います（muse-link の GitHub Releases から、ダウンロードとインストールまで本体アプリ内で完結します）
+- プラグインは、アプリの実行フォルダにある `plugins` フォルダにフォルダ単位で置く方式です。プラグイン管理ページ（メニュー「プラグイン」→「プラグイン管理を開く」）が自動で認識して一覧に出します
+- Muse Link のインストール／アップデートはプラグイン管理ページから行えます（GitHub Releases から取得して `plugins` フォルダへ展開します）
 - エージェントは本体アプリの起動中のみ動作し、本体を終了するとエージェントも終了します
+- 自作プラグインも同じ形式で作れます。Releases の `Muse-Plugin-Template.zip` がサンプルです
 
 ## 自動更新
 
@@ -35,5 +48,6 @@ Muse があなたの PC のフォルダで作業できるようにする連携�
 ## 構成
 
 - `app/` — Muse アプリ（Electron ラッパー）
+- `plugin-template/` — プラグイン作成用サンプルの原稿（リリースに zip で付きます）
 - Muse Link は別リポジトリ（yorukaze-luru/muse-link）に分離しました
-- リリースは GitHub Actions でビルドしています（タグ `v*` で下書きリリースを作成）
+- リリースは GitHub Actions で自動化しています（バージョンを上げると、ビルドからリリースページの作成まで自動で進みます）
